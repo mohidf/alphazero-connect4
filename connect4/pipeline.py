@@ -13,6 +13,7 @@ degrades instead of improving. Requiring a win rate above a threshold before
 promotion makes the process monotone in practice.
 """
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from connect4.network import Connect4Net, default_device, load, save
 from connect4.selfplay import generate_games
 from connect4.train import (
     BATCH_SIZE,
+    BUFFER_SIZE,
+    LEARNING_RATE,
     ReplayBuffer,
     make_optimizer,
     train_epoch,
@@ -41,6 +44,18 @@ class Config:
     simulations: int = 120
     train_steps: int = 100
     batch_size: int = BATCH_SIZE
+    # Stop cleanly after this long, whatever `iterations` says. For an unattended
+    # run this matters more than the iteration count: it guarantees a finished
+    # best.pt and a complete log rather than whatever state a kill leaves behind.
+    max_hours: float | None = None
+    buffer_size: int = BUFFER_SIZE
+    # Step decay. A fixed rate plateaus early over hundreds of iterations, and
+    # the optimiser is rebuilt each iteration anyway, so the schedule is just a
+    # function of the iteration number.
+    learning_rate: float = LEARNING_RATE
+    lr_decay_every: int = 40
+    lr_decay_gamma: float = 0.5
+    lr_min: float = 5e-5
     parallel_games: int = 24
     eval_games: int = 20
     # Arena games run one search at a time, so their evaluations cannot be
@@ -57,6 +72,12 @@ class Config:
     seed: int = 0
 
 
+def learning_rate_for(iteration: int, config: "Config") -> float:
+    """Step decay, floored at config.lr_min."""
+    decays = (iteration - 1) // config.lr_decay_every
+    return max(config.lr_min, config.learning_rate * config.lr_decay_gamma**decays)
+
+
 @dataclass
 class IterationReport:
     iteration: int
@@ -68,6 +89,8 @@ class IterationReport:
     vs_incumbent: arena.MatchResult | None = None
     promoted: bool = False
     vs_benchmark: arena.MatchResult | None = None
+    learning_rate: float = LEARNING_RATE
+    elapsed: float = 0.0
     extras: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
@@ -76,6 +99,8 @@ class IterationReport:
             f"samples {self.samples:>5}",
             f"buffer {self.buffer:>6}",
             f"loss {self.loss_total:.4f} (p {self.loss_policy:.4f} v {self.loss_value:.4f})",
+            f"lr {self.learning_rate:.1e}",
+            f"{self.elapsed / 60:.0f}m",
         ]
         if self.vs_incumbent is not None:
             parts.append(f"vs prev {self.vs_incumbent} {'PROMOTED' if self.promoted else 'kept old'}")
@@ -96,10 +121,17 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
     best = Connect4Net().to(device).eval()
     save(best, config.checkpoint_dir / "iter000.pt")
 
-    buffer = ReplayBuffer()
+    buffer = ReplayBuffer(capacity=config.buffer_size)
     reports: list[IterationReport] = []
+    started = time.monotonic()
+    deadline = None if config.max_hours is None else started + config.max_hours * 3600
 
     for iteration in range(1, config.iterations + 1):
+        if deadline is not None and time.monotonic() >= deadline:
+            if verbose:
+                print(f"time budget reached after {iteration - 1} iterations", flush=True)
+            break
+
         # --- self-play with the current best ---------------------------------
         samples = generate_games(
             best,
@@ -114,7 +146,8 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
         # --- train a challenger, starting from the incumbent's weights -------
         challenger = Connect4Net().to(device)
         challenger.load_state_dict(best.state_dict())
-        optimizer = make_optimizer(challenger)
+        lr = learning_rate_for(iteration, config)
+        optimizer = make_optimizer(challenger, learning_rate=lr)
         loss = train_epoch(
             challenger,
             optimizer,
@@ -132,6 +165,8 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
             loss_total=loss.total,
             loss_policy=loss.policy,
             loss_value=loss.value,
+            learning_rate=lr,
+            elapsed=time.monotonic() - started,
         )
 
         # --- gate: only promote a challenger that actually beats the best ----

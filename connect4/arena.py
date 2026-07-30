@@ -33,7 +33,7 @@ from connect4.board import Board, PLAYER_R, PLAYER_Y
 from connect4.mcts import other
 from connect4 import alphabeta as ab
 from connect4.network import Connect4Net
-from connect4.puct import C_PUCT, network_evaluator, puct_move
+from connect4.puct import C_PUCT, caching_evaluator, network_evaluator, puct_move
 
 # (board, player) -> column
 Agent = Callable[[Board, str], int]
@@ -85,8 +85,13 @@ def network_agent(
 
     Noise exists to diversify training data; using it here would just make the
     agent weaker and the measurement noisier.
+
+    Evaluations are cached. Arena searches run one at a time so they cannot be
+    batched, and consecutive moves in a game re-search overlapping subtrees — the
+    cache is what stops evaluation dominating a long training run. It is built
+    per call, so it never outlives the weights it was filled from.
     """
-    evaluator = network_evaluator(net)
+    evaluator = caching_evaluator(network_evaluator(net))
 
     def agent(board: Board, player: str) -> int:
         return puct_move(board, player, evaluator, simulations, c_puct)

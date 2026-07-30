@@ -119,6 +119,32 @@ def network_evaluator(net: Connect4Net) -> Evaluator:
     return evaluate
 
 
+def caching_evaluator(evaluator: Evaluator, capacity: int = 200_000) -> Evaluator:
+    """Memoise an evaluator on (position, player to move).
+
+    Worth it wherever searches run one at a time and cannot be batched — arena
+    games especially, where consecutive moves re-search overlapping subtrees.
+    Positions also repeat within a single tree via different move orders.
+
+    The cache is only valid for one fixed network: build a new one whenever the
+    weights change, or it will serve a previous network's opinions.
+    """
+    cache: dict[tuple, tuple[np.ndarray, float]] = {}
+
+    def evaluate(board: Board, player: str) -> tuple[np.ndarray, float]:
+        key = (tuple(map(tuple, board.grid)), player)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+
+        result = evaluator(board, player)
+        if len(cache) < capacity:
+            cache[key] = result
+        return result
+
+    return evaluate
+
+
 def uniform_evaluator(board: Board, player: str) -> tuple[np.ndarray, float]:
     """A network-free evaluator: flat priors, neutral value.
 
