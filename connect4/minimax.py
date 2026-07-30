@@ -39,12 +39,35 @@ def score(board: Board, depth: int) -> int:
     return 0
 
 
+# Nodes entered by the last top-level search. This is the baseline the
+# alpha-beta counter is compared against, so both must count the same event:
+# one increment per call, at the top, before the base cases.
+_nodes = 0
+
+
+def reset_nodes() -> None:
+    """Zero the node counter. Call before each top-level search."""
+    global _nodes
+    _nodes = 0
+
+
+def nodes_visited() -> int:
+    """Nodes entered since the last reset_nodes()."""
+    return _nodes
+
+
 def minimax(board: Board, depth: int, is_maximizing: bool) -> int:
     """Return the estimated value of `board`. Positive favours R.
 
     The terminal check must come before the depth check: a position that is both
     a win and at the horizon has to return the win score, not the heuristic.
+
+    Iterates available_moves() directly, which is ascending — so this doubles as
+    the left-to-right baseline for the move-ordering comparison.
     """
+    global _nodes
+    _nodes += 1
+
     if board.is_terminal():
         return score(board, depth)
     if depth == 0:
