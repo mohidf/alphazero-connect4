@@ -16,7 +16,7 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Claude files (kept local, never committed)
+# Local tooling config
 CLAUDE.md
 .claude/
 
