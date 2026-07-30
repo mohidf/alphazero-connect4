@@ -125,82 +125,95 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
     reports: list[IterationReport] = []
     started = time.monotonic()
     deadline = None if config.max_hours is None else started + config.max_hours * 3600
+    stop_file = config.checkpoint_dir / "STOP"
 
-    for iteration in range(1, config.iterations + 1):
-        if deadline is not None and time.monotonic() >= deadline:
-            if verbose:
-                print(f"time budget reached after {iteration - 1} iterations", flush=True)
-            break
+    try:
+        for iteration in range(1, config.iterations + 1):
+            if deadline is not None and time.monotonic() >= deadline:
+                if verbose:
+                    print(f"time budget reached after {iteration - 1} iterations", flush=True)
+                break
 
-        # --- self-play with the current best ---------------------------------
-        samples = generate_games(
-            best,
-            games=config.games_per_iteration,
-            simulations=config.simulations,
-            parallel=config.parallel_games,
-            add_noise=True,
-            rng=rng,
-        )
-        buffer.extend(samples)
+            # Creating this file asks the loop to finish the current iteration and
+            # exit cleanly, without needing the terminal in focus. Ctrl+C works too
+            # and is handled below; both paths still write best.pt.
+            if stop_file.exists():
+                if verbose:
+                    print(f"stop file found after {iteration - 1} iterations", flush=True)
+                stop_file.unlink()
+                break
 
-        # --- train a challenger, starting from the incumbent's weights -------
-        challenger = Connect4Net().to(device)
-        challenger.load_state_dict(best.state_dict())
-        lr = learning_rate_for(iteration, config)
-        optimizer = make_optimizer(challenger, learning_rate=lr)
-        loss = train_epoch(
-            challenger,
-            optimizer,
-            buffer,
-            device,
-            steps=config.train_steps,
-            batch_size=config.batch_size,
-            rng=rng,
-        )
+            # --- self-play with the current best ---------------------------------
+            samples = generate_games(
+                best,
+                games=config.games_per_iteration,
+                simulations=config.simulations,
+                parallel=config.parallel_games,
+                add_noise=True,
+                rng=rng,
+            )
+            buffer.extend(samples)
 
-        report = IterationReport(
-            iteration=iteration,
-            samples=len(samples),
-            buffer=len(buffer),
-            loss_total=loss.total,
-            loss_policy=loss.policy,
-            loss_value=loss.value,
-            learning_rate=lr,
-            elapsed=time.monotonic() - started,
-        )
+            # --- train a challenger, starting from the incumbent's weights -------
+            challenger = Connect4Net().to(device)
+            challenger.load_state_dict(best.state_dict())
+            lr = learning_rate_for(iteration, config)
+            optimizer = make_optimizer(challenger, learning_rate=lr)
+            loss = train_epoch(
+                challenger,
+                optimizer,
+                buffer,
+                device,
+                steps=config.train_steps,
+                batch_size=config.batch_size,
+                rng=rng,
+            )
 
-        # --- gate: only promote a challenger that actually beats the best ----
-        result = arena.play_match(
-            arena.network_agent(challenger, config.eval_simulations),
-            arena.network_agent(best, config.eval_simulations),
-            games=config.eval_games,
-            rng=rng,
-            opening_plies=config.opening_plies,
-        )
-        report.vs_incumbent = result
-        report.promoted = result.score > PROMOTION_THRESHOLD
+            report = IterationReport(
+                iteration=iteration,
+                samples=len(samples),
+                buffer=len(buffer),
+                loss_total=loss.total,
+                loss_policy=loss.policy,
+                loss_value=loss.value,
+                learning_rate=lr,
+                elapsed=time.monotonic() - started,
+            )
 
-        if report.promoted:
-            best = challenger.eval()
-            save(best, config.checkpoint_dir / f"iter{iteration:03d}.pt")
-
-        # --- fixed benchmark of known strength -------------------------------
-        if iteration % config.benchmark_every == 0:
-            report.vs_benchmark = arena.play_match(
+            # --- gate: only promote a challenger that actually beats the best ----
+            result = arena.play_match(
+                arena.network_agent(challenger, config.eval_simulations),
                 arena.network_agent(best, config.eval_simulations),
-                arena.alphabeta_agent(config.benchmark_depth),
                 games=config.eval_games,
                 rng=rng,
                 opening_plies=config.opening_plies,
             )
+            report.vs_incumbent = result
+            report.promoted = result.score > PROMOTION_THRESHOLD
 
-        reports.append(report)
+            if report.promoted:
+                best = challenger.eval()
+                save(best, config.checkpoint_dir / f"iter{iteration:03d}.pt")
+
+            # --- fixed benchmark of known strength -------------------------------
+            if iteration % config.benchmark_every == 0:
+                report.vs_benchmark = arena.play_match(
+                    arena.network_agent(best, config.eval_simulations),
+                    arena.alphabeta_agent(config.benchmark_depth),
+                    games=config.eval_games,
+                    rng=rng,
+                    opening_plies=config.opening_plies,
+                )
+
+            reports.append(report)
+            if verbose:
+                print(report, flush=True)
+
+    except KeyboardInterrupt:
         if verbose:
-            print(report, flush=True)
+            print("\ninterrupted — saving the best network before exit", flush=True)
 
+    # Always, on every exit path: a run that cannot hand back its best network is
+    # a wasted night.
     save(best, config.checkpoint_dir / "best.pt")
     return reports
-
-
-if __name__ == "__main__":
-    run()
