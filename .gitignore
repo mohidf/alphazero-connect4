@@ -22,3 +22,7 @@ CLAUDE.md
 
 # Excluded per request
 requirements.txt
+
+# Training artifacts
+checkpoints/
+*.pt
