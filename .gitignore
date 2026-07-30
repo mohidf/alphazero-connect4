@@ -16,9 +16,6 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Excluded per request
-requirements.txt
-
 # Training artifacts
 checkpoints/
 *.pt
