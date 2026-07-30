@@ -19,25 +19,46 @@ pip install -r requirements.txt
 ```
 
 You need Python 3.13. PyTorch will use your GPU if you have one, otherwise CPU
-(training is much slower on CPU).
+(training is much slower on CPU). tkinter comes with Python, so the window needs
+nothing extra beyond Pillow, which is in requirements.txt.
 
 ## Play against it
+
+There's a window:
+
+```bash
+python -m connect4.gui
+python -m connect4.gui --opponent alphabeta --depth 6
+python -m connect4.gui --checkpoint checkpoints/big/best.pt --simulations 800
+```
+
+Hover over a column to see where the piece would land, click to drop it. **New
+game** asks which colour you want (red goes first). When someone wins, the four
+pieces that did it get outlined.
+
+The board is drawn with Pillow rather than tkinter shapes, because tkinter's
+circles come out jagged - there's no anti-aliasing on its canvas. The pieces are
+rendered once at startup and pasted, so hovering stays smooth.
+
+The bot thinks on a background thread. If it didn't, the window would freeze for
+the whole search and Windows would grey it out as not responding.
+
+### Or in the terminal
 
 ```bash
 python -m connect4.play --opponent alphabeta --depth 6
 python -m connect4.play --checkpoint checkpoints/best.pt --simulations 400
 ```
 
-You're red and go first. Type a column number 0-6. The bot prints what it was
-thinking each move - how many times it looked at each column, and whether it
+You're red and go first. Type a column number 0-6. This one prints what the bot
+was thinking each move - how many times it looked at each column, and whether it
 thinks it's winning:
 
 ```
 search: 0:  0% 1:  3% 2: 70% 3:  2% 4: 22% 5:  3% 6:  0%   value -0.24
 ```
 
-Other options: `--second` to let it move first, `--opponent random`, `--quiet` to
-hide the search output.
+Both take `--second` to let the bot move first and `--opponent random`.
 
 ## Train it
 
@@ -166,7 +187,8 @@ connect4/
   train.py       the loss function and training loop
   arena.py       playing two bots against each other to compare them
   pipeline.py    the full loop: play -> train -> test -> repeat
-  play.py        play against it yourself
+  play.py        play against it in the terminal
+  gui.py         play against it in a window
   solver.py      wrapper around the perfect solver, for benchmarking
 
 run_overnight.py      long training run
