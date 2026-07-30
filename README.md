@@ -104,7 +104,7 @@ connect4/
   play.py        play against it yourself
 ```
 
-## Stuff I learned the hard way
+## Things I learned the hard way
 
 - Copying a 2D list in Python doesn't copy the inner lists. This bit me three
   separate times.
@@ -116,9 +116,3 @@ connect4/
 - Training loss going down doesn't mean the bot got better. The only way to know
   is to make it play games.
 
-## Things I'd do next
-
-- Run self-play across multiple CPU cores (right now it's the bottleneck — the GPU
-  is only about 15% busy)
-- Try a bigger network
-- Compare against a perfect solver, since Connect 4 is actually solved
