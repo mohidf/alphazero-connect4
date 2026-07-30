@@ -47,6 +47,17 @@ def main() -> None:
     parser.add_argument("--hours", type=float, default=8.0)
     parser.add_argument("--tag", default="overnight")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--channels", type=int, default=64, help="trunk width (fresh runs only)")
+    parser.add_argument("--blocks", type=int, default=4, help="residual blocks (fresh runs only)")
+    parser.add_argument("--simulations", type=int, default=400, help="PUCT sims per self-play move")
+    parser.add_argument("--games", type=int, default=64, help="self-play games per iteration")
+    parser.add_argument("--parallel", type=int, default=64, help="games in flight (batch size)")
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        default=None,
+        help="start from an existing checkpoint instead of a fresh network",
+    )
     args = parser.parse_args()
 
     checkpoint_dir = Path("checkpoints") / args.tag
@@ -58,9 +69,11 @@ def main() -> None:
         iterations=10_000,
         max_hours=args.hours,
 
-        games_per_iteration=64,
-        simulations=400,          # 4x the short run; this is what search quality buys
-        parallel_games=64,        # every game in flight, so batches stay full
+        games_per_iteration=args.games,
+        simulations=args.simulations,
+        parallel_games=args.parallel,
+        channels=args.channels,
+        blocks=args.blocks,
 
         train_steps=250,
         batch_size=256,
@@ -78,6 +91,7 @@ def main() -> None:
         benchmark_every=5,        # the expensive one; every 5th iteration is plenty
 
         checkpoint_dir=checkpoint_dir,
+        resume_from=args.resume,
         seed=args.seed,
     )
 
@@ -87,6 +101,8 @@ def main() -> None:
         sys.stdout = Tee(original, log)
         try:
             print(f"=== run '{args.tag}': {args.hours}h budget, seed {args.seed} ===")
+            if args.resume:
+                print(f"    resuming from {args.resume}")
             print(f"    logging to {log_path}")
             reports = run(config)
         finally:

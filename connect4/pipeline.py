@@ -21,7 +21,15 @@ import numpy as np
 import torch
 
 from connect4 import arena
-from connect4.network import Connect4Net, default_device, load, save
+from connect4.network import (
+    BLOCKS,
+    CHANNELS,
+    Connect4Net,
+    count_parameters,
+    default_device,
+    load,
+    save,
+)
 from connect4.selfplay import generate_games
 from connect4.train import (
     BATCH_SIZE,
@@ -42,6 +50,10 @@ class Config:
     iterations: int = 10
     games_per_iteration: int = 24
     simulations: int = 120
+    # Network size. Only used when starting fresh — a resumed run takes its shape
+    # from the checkpoint, since the weights define it.
+    channels: int = CHANNELS
+    blocks: int = BLOCKS
     train_steps: int = 100
     batch_size: int = BATCH_SIZE
     # Stop cleanly after this long, whatever `iterations` says. For an unattended
@@ -69,6 +81,11 @@ class Config:
     benchmark_depth: int = 4
     benchmark_every: int = 1
     checkpoint_dir: Path = Path("checkpoints")
+    # Start from an existing network instead of a fresh one. Without this, any
+    # interruption means starting over — training is not resumable in the deeper
+    # sense (the replay buffer is lost, so the first few iterations refill it),
+    # but the weights carry across, which is what actually took the hours.
+    resume_from: Path | None = None
     seed: int = 0
 
 
@@ -118,8 +135,19 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
 
     config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    best = Connect4Net().to(device).eval()
-    save(best, config.checkpoint_dir / "iter000.pt")
+    if config.resume_from is not None:
+        best = load(config.resume_from, device)
+        if verbose:
+            print(f"resuming from {config.resume_from}", flush=True)
+    else:
+        best = Connect4Net(channels=config.channels, blocks=config.blocks).to(device).eval()
+        if verbose:
+            print(
+                f"fresh network: {config.channels} channels, {config.blocks} blocks, "
+                f"{count_parameters(best):,} parameters",
+                flush=True,
+            )
+        save(best, config.checkpoint_dir / "iter000.pt")
 
     buffer = ReplayBuffer(capacity=config.buffer_size)
     reports: list[IterationReport] = []
@@ -155,7 +183,11 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
             buffer.extend(samples)
 
             # --- train a challenger, starting from the incumbent's weights -------
-            challenger = Connect4Net().to(device)
+            # Shape comes from the incumbent, not the config: a resumed run's
+            # network is defined by its checkpoint.
+            challenger = Connect4Net(
+                channels=best.channels, blocks=best.blocks_count
+            ).to(device)
             challenger.load_state_dict(best.state_dict())
             lr = learning_rate_for(iteration, config)
             optimizer = make_optimizer(challenger, learning_rate=lr)
@@ -194,6 +226,10 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
             if report.promoted:
                 best = challenger.eval()
                 save(best, config.checkpoint_dir / f"iter{iteration:03d}.pt")
+                # Also refresh best.pt on every promotion, not only at exit. A
+                # hard kill — a crash, a lost terminal, a reboot — must never be
+                # able to cost the network that took the hours to train.
+                save(best, config.checkpoint_dir / "best.pt")
 
             # --- fixed benchmark of known strength -------------------------------
             if iteration % config.benchmark_every == 0:
