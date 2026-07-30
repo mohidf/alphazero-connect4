@@ -16,10 +16,6 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Local tooling config
-CLAUDE.md
-.claude/
-
 # Excluded per request
 requirements.txt
 
