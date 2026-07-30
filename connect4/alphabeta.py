@@ -1,14 +1,10 @@
-"""Depth-limited minimax with alpha-beta pruning, plus move ordering.
+"""Minimax plus alpha-beta pruning and move ordering.
 
-Same contract as minimax(): returns the estimated value of a position, positive
-favouring R. Provably returns the same *value* as plain minimax at the root —
-but not necessarily the same move, since ties are broken by iteration order and
-pruning changes which ties are ever seen.
+Returns the same value as plain minimax, though not always the same move, since
+pruning changes which tied moves ever get looked at.
 
-Alpha-beta's payoff depends on move order:
-    perfect ordering    -> O(b^(d/2))
-    worst-case ordering -> O(b^d), no better than plain minimax
-Hence COLUMN_ORDER below. It is the cheapest large win available in this phase.
+Move order matters a lot here: with good ordering alpha-beta is O(b^(d/2)), with
+bad ordering it's O(b^d) and no better than plain minimax.
 """
 
 import operator
@@ -17,36 +13,24 @@ from connect4.board import Board, COLS, PLAYER_R, PLAYER_Y
 from connect4.evaluate import evaluate
 from connect4.minimax import WIN_SCORE, WORST_FOR_R, WORST_FOR_Y, score
 
-# Centre-out. Central columns sit in more windows and tend to be stronger, so
-# trying them first tightens alpha/beta earlier and cuts more subtrees.
+# Middle columns first. They're usually the better moves, so trying them early
+# tightens the window sooner and cuts more branches.
 COLUMN_ORDER = [3, 2, 4, 1, 5, 0, 6]
 
-# Nodes entered by the last top-level search. Reset by reset_nodes(); compared
-# against minimax's counter to prove the pruning is real.
 _nodes = 0
 
 
 def reset_nodes() -> None:
-    """Zero the node counter. Call before each top-level search."""
     global _nodes
     _nodes = 0
 
 
 def nodes_visited() -> int:
-    """Nodes entered since the last reset_nodes()."""
     return _nodes
 
 
 def ordered_moves(board: Board, order: list[int] = COLUMN_ORDER) -> list[int]:
-    """Return the legal columns of `board`, sequenced by `order`.
-
-    A permutation of board.available_moves() — same columns, different order.
-    Pass order=list(range(COLS)) for plain left-to-right, which is the baseline
-    the ordering comparison measures against.
-
-    Walks `order` and filters, rather than sorting by rank: this runs at every
-    node, so it stays O(COLS) with no per-comparison index lookups.
-    """
+    """Legal columns, in `order`. Pass list(range(COLS)) for left-to-right."""
     available = board.available_moves()
     return [col for col in order if col in available]
 
@@ -59,17 +43,12 @@ def alphabeta(
     beta: int = WORST_FOR_Y,
     order: list[int] = COLUMN_ORDER,
 ) -> int:
-    """Return the estimated value of `board`. Positive favours R.
+    """Estimated value of the position. Positive favours R.
 
-    Base cases are identical to minimax(), and the ordering rule is the same:
-    terminal before depth.
+    `order` gets passed down so children use the same ordering, otherwise the
+    left-to-right baseline isn't actually left-to-right below the root.
 
-    `order` is threaded into every recursive call. Dropping it would let children
-    revert to the default centre-first ordering, which would quietly make the
-    left-to-right baseline a lie and invalidate the ordering comparison.
-
-    Note the `break` sits after undo_move: an early exit still has to restore
-    the board, and the pruned paths are the hardest ones to notice corruption on.
+    The break comes after undo_move, or pruned branches leave the board dirty.
     """
     global _nodes
     _nodes += 1
@@ -108,15 +87,11 @@ def best_move(
     is_maximizing: bool,
     order: list[int] = COLUMN_ORDER,
 ) -> tuple[int | None, int]:
-    """Return the (column, value) this search considers best from `board`.
+    """Best (column, value) from this position.
 
-    Worth threading alpha/beta through this loop too rather than calling
-    alphabeta() with fresh bounds each time: after the first child returns, its
-    value is a valid alpha (or beta) for the remaining children, and skipping
-    that gives up most of the pruning at the root.
-
-    Does NOT reset the node counter — the caller owns that boundary, so the same
-    measurement applies to minimax.best_move() and this one.
+    Carries alpha/beta across the children instead of restarting the window each
+    time, which is where most of the pruning at the root comes from. Doesn't
+    touch the node counter, so it can be compared with minimax.best_move().
     """
     moves = ordered_moves(board, order)
     if not moves:
@@ -137,9 +112,8 @@ def best_move(
             best_score = value
             best_col = col
 
-        # Narrow the window for the remaining children. A child that can't beat
-        # the best so far may return an inexact bound, but it also can't be
-        # selected, since the comparison above is strict.
+        # A child that can't beat the best so far might return a loose bound,
+        # but the strict comparison above means it can't get picked anyway.
         if is_maximizing:
             alpha = max(alpha, best_score)
         else:

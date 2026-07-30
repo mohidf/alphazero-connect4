@@ -1,21 +1,14 @@
-"""Overnight training run. Launch and leave it.
+"""Long training run. Start it and leave it.
 
-    python run_overnight.py                  # ~8 hours
-    python run_overnight.py --hours 4
-    python run_overnight.py --hours 8 --tag second-attempt
+    python run_overnight.py --hours 8
+    python run_overnight.py --hours 10 --tag big --channels 128 --blocks 8
+    python run_overnight.py --hours 6 --tag more --resume checkpoints/x/best.pt
 
-Everything is logged to `checkpoints/<tag>/train.log` as well as stdout, so the run
-survives losing the terminal. Checkpoints land in the same directory: one per
-promotion, plus `best.pt` written when the run finishes or the time budget expires.
+Output goes to checkpoints/<tag>/train.log as well as the terminal, so it doesn't
+matter if the terminal goes away. Checkpoints land in the same folder.
 
-Settings are calibrated to this machine (RTX 4050, ~300k-parameter network):
-
-    self-play        2.65 s/game at 400 simulations, 64 games in flight
-    arena vs prev    ~50 s for 20 games at 100 simulations, cached
-    arena vs ab-d4   ~27 s for 20 games
-
-which works out to roughly 3.5 minutes per iteration, so about 140 iterations in
-8 hours and ~380k training positions. The previous 10-iteration run produced 16k.
+Defaults are sized for this machine: about 2.5 minutes an iteration, so roughly
+170 iterations in 8 hours.
 """
 
 import argparse
@@ -26,7 +19,7 @@ from connect4.pipeline import Config, run
 
 
 class Tee:
-    """Write to several streams at once, so the log and the console agree."""
+    """Write to the terminal and the log file at the same time."""
 
     def __init__(self, *streams):
         self.streams = streams
@@ -64,8 +57,7 @@ def main() -> None:
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     config = Config(
-        # A ceiling far above what the time budget allows: max_hours is what
-        # actually ends the run, and it ends it cleanly with best.pt written.
+        # Huge on purpose; max_hours is what actually stops it.
         iterations=10_000,
         max_hours=args.hours,
 
@@ -77,7 +69,7 @@ def main() -> None:
 
         train_steps=250,
         batch_size=256,
-        buffer_size=150_000,      # ~55 iterations of history
+        buffer_size=150_000,
 
         learning_rate=1e-3,
         lr_decay_every=40,
@@ -88,7 +80,7 @@ def main() -> None:
         eval_simulations=100,
         opening_plies=4,
         benchmark_depth=4,
-        benchmark_every=5,        # the expensive one; every 5th iteration is plenty
+        benchmark_every=5,        # it's slow, and every 5th is enough
 
         checkpoint_dir=checkpoint_dir,
         resume_from=args.resume,

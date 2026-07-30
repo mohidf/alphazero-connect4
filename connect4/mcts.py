@@ -1,13 +1,7 @@
-"""Vanilla Monte Carlo Tree Search for Connect-4: random rollouts, no network.
+"""Monte Carlo Tree Search with random rollouts. No network involved.
 
-Structurally the same four phases as the Tic-Tac-Toe version — select, expand,
-simulate, backpropagate — with one thing to respect throughout: every board a
-node holds must come from Board.copy(), never Board(list(grid)). See the note in
-board.py for why both halves of that matter.
-
-Expect this to beat a random player easily and lose to depth-6 alpha-beta.
-Random rollouts over 42 moves are a poor proxy for good play, and are nearly
-blind to forced tactics. That gap is what Phase 4's learned value head closes.
+The usual four steps: select, expand, simulate, backpropagate. Node boards come
+from Board.copy() so they keep their move history.
 """
 
 import math
@@ -15,8 +9,7 @@ import random
 
 from connect4.board import Board, PLAYER_R, PLAYER_Y
 
-# sqrt(2) is the standard UCB1 constant for rewards scaled to [0, 1], which is
-# what the win/draw/loss encoding below produces.
+# Standard UCB1 constant for rewards in [0, 1].
 EXPLORATION = math.sqrt(2)
 
 WIN_REWARD = 1.0
@@ -25,16 +18,14 @@ LOSS_REWARD = 0.0
 
 
 def other(player: str) -> str:
-    """Return the opposing player."""
     return PLAYER_Y if player == PLAYER_R else PLAYER_R
 
 
 class Node:
-    """One position in the search tree.
+    """A position in the tree.
 
-    `player_to_move` is whose turn it is *from* this node. The move that created
-    this node was therefore played by other(player_to_move) — which is the
-    player whose result backpropagate() must credit here.
+    player_to_move is whose turn it is here, so the move that got us here was
+    played by the *other* one. That's who backpropagate() credits.
     """
 
     def __init__(
@@ -47,22 +38,17 @@ class Node:
         self.board = board
         self.player_to_move = player_to_move
         self.parent = parent
-        self.move = move                       # column played to reach this node
+        self.move = move
         self.children: list["Node"] = []
         self.untried_moves: list[int] = board.available_moves()
-        self.visits = 0                        # n_i
-        self.wins = 0.0                        # w_i, in reward units above
+        self.visits = 0
+        self.wins = 0.0
 
     def is_fully_expanded(self) -> bool:
-        """True when every legal move from here has a child."""
         return len(self.untried_moves) == 0
 
     def ucb1(self, exploration: float = EXPLORATION) -> float:
-        """UCB1 score, used to choose among a parent's children during selection.
-
-        An unvisited node must score infinitely high so it gets tried before any
-        visited sibling is revisited.
-        """
+        # Unvisited scores infinity so it gets tried before anything is revisited.
         if self.visits == 0:
             return float("inf")
 
@@ -73,24 +59,18 @@ class Node:
         return exploitation + exploration_term
 
     def best_child(self) -> "Node":
-        """Return the child with the highest UCB1 score."""
         return max(self.children, key=lambda child: child.ucb1())
 
 
 def select(node: Node) -> Node:
-    """Descend from `node` via best_child() while it is fully expanded and
-    non-terminal. Return the node where descent stopped."""
+    """Walk down while there's nothing new to try and the game isn't over."""
     while node.is_fully_expanded() and not node.board.is_terminal():
         node = node.best_child()
     return node
 
 
 def expand(node: Node) -> Node:
-    """Take one untried move from `node`, attach a child for it, return the child.
-
-    The child's board must be node.board.copy() with the move applied — a fresh
-    Board(grid) would lose last_move and report no winner.
-    """
+    """Try one of the untried moves and hang a new child off it."""
     if not node.untried_moves:
         raise ValueError("Cannot expand a fully expanded node")
     move = random.choice(node.untried_moves)
@@ -108,10 +88,7 @@ def expand(node: Node) -> Node:
 
 
 def rollout(board: Board, player_to_move: str) -> str | None:
-    """Play uniformly random moves from a copy of `board` until terminal.
-
-    Returns the winning player, or None for a draw. Must not mutate `board`.
-    """
+    """Play random moves on a copy until the game ends. Returns the winner."""
     rollout_board = board.copy()
     while not rollout_board.is_terminal():
         moves = rollout_board.available_moves()
@@ -124,11 +101,10 @@ def rollout(board: Board, player_to_move: str) -> str | None:
 
 
 def backpropagate(node: Node | None, winner: str | None) -> None:
-    """Walk from `node` to the root, adding one visit and the reward at each step.
+    """Add a visit and the result to every node back up to the root.
 
-    The reward at each node is from the perspective of the player who *moved into*
-    it — other(node.player_to_move) — not the player to move from it. Getting
-    this backwards produces a search that reliably prefers losing moves.
+    Each node is scored for whoever moved *into* it. Get this backwards and the
+    search happily picks losing moves.
     """
     while node is not None:
         node.visits += 1
@@ -142,29 +118,18 @@ def backpropagate(node: Node | None, winner: str | None) -> None:
 
 
 def build_tree(board: Board, player: str, simulations: int) -> Node:
-    """Run `simulations` MCTS iterations from `board` and return the root node.
-
-    Split out from mcts_move() so the tree itself can be inspected — visit
-    distributions, whether terminal nodes stayed unexpanded, whether the root
-    saw every simulation. mcts_move() is then just "build a tree, read off the
-    most-visited child".
-    """
-    # Copy at the root so the caller's board can never be touched, whatever the
-    # tree does with its own copies.
+    """Run the search and hand back the root, so the tree can be inspected."""
     root = Node(board=board.copy(), player_to_move=player)
 
     for _ in range(simulations):
         node = select(root)
 
-        # Guard on the position, NOT on is_fully_expanded(). A won Connect-4
-        # board usually still has legal moves, so a terminal node is never
-        # "fully expanded" — expanding it would play on past the win and make
-        # winner() report None for a decided game.
+        # Check the position, not is_fully_expanded(). A won board usually still
+        # has legal moves, so expanding here would play on past the win.
         if not node.board.is_terminal():
             node = expand(node)
 
-        # A terminal node needs no rollout: the loop inside rollout() exits
-        # immediately and returns the winner already on the board.
+        # On a terminal node rollout() returns straight away with the winner.
         winner = rollout(node.board, node.player_to_move)
         backpropagate(node, winner)
 
@@ -172,13 +137,8 @@ def build_tree(board: Board, player: str, simulations: int) -> Node:
 
 
 def mcts_move(board: Board, player: str, simulations: int = 1000) -> int | None:
-    """Return the column MCTS favours after `simulations` iterations.
-
-    Final choice is by visit count, not by win rate: visits are the robust
-    statistic, since a child with one lucky win has a 100% rate on one sample.
-
-    Returns None if the position has no legal moves.
-    """
+    """Pick a move. Uses visit count, not win rate - one lucky win off a single
+    visit would otherwise look like a 100% move."""
     root = build_tree(board, player, simulations)
     if not root.children:
         return None

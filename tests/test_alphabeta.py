@@ -1,15 +1,10 @@
-"""Tests for alpha-beta pruning and move ordering.
+"""Tests for alpha-beta and move ordering.
 
-Three distinct claims, tested separately so a result can be attributed:
+Three separate things: that pruning gives the same answer as plain minimax, that
+it visits fewer nodes, and that centre-first ordering visits fewer still.
 
-  1. Pruning is correct    -> alphabeta agrees with minimax on VALUE
-  2. Pruning is effective  -> alphabeta enters strictly fewer nodes than minimax
-  3. Ordering is effective -> centre-first enters fewer nodes than left-to-right
-
-Note (1) is about values, not moves. Alpha-beta provably returns the same root
-value as plain minimax, but when several moves tie it may report a different one,
-since which ties are ever seen depends on iteration order and on what got cut.
-Equal-move assertions are therefore confined to positions with a unique best move.
+Same value, not necessarily the same move - when moves tie, pruning changes which
+one gets reported, so only forced positions are checked by column.
 """
 
 import pytest
@@ -28,7 +23,7 @@ from tests.test_minimax import (
 
 LEFT_TO_RIGHT = list(range(COLS))
 
-# Deliberately varied in density and symmetry — the empty board is the one most
+# Varied in density and symmetry. The empty board is the one most
 # likely to expose a tie-breaking difference, and the denser ones stress the
 # depth cutoff.
 AGREEMENT_POSITIONS = [
@@ -71,8 +66,8 @@ def full_column_board(col: int) -> Board:
 # --------------------------------------------------------------------------
 
 def test_column_order_is_a_permutation_of_all_columns():
-    """COLUMN_ORDER must name every column exactly once — otherwise the search
-    silently never considers some legal moves."""
+    """COLUMN_ORDER must name every column exactly once - otherwise the search silently
+    never considers some legal moves."""
     assert sorted(COLUMN_ORDER) == LEFT_TO_RIGHT
 
 
@@ -95,8 +90,8 @@ def test_ordered_moves_skips_full_columns():
 
 
 def test_left_to_right_order_matches_available_moves():
-    """order=LEFT_TO_RIGHT must reproduce available_moves() exactly — this is
-    the baseline the ordering comparison depends on being honest."""
+    """order=LEFT_TO_RIGHT must reproduce available_moves() exactly - this is the baseline
+    the ordering comparison depends on being honest."""
     for board in [Board(), full_column_board(0), play([(2, R), (2, Y)])]:
         assert ordered_moves(board, LEFT_TO_RIGHT) == board.available_moves()
 
@@ -107,12 +102,7 @@ def test_left_to_right_order_matches_available_moves():
 
 @pytest.mark.parametrize("depth", [1, 2, 3, 4])
 def test_agrees_with_minimax_on_value(depth):
-    """The core correctness claim, swept over positions and depths.
-
-    The value must be identical regardless of the order children are visited in.
-    If this fails at one depth only, suspect the cutoff condition; if it fails
-    everywhere, suspect the alpha/beta updates.
-    """
+    """The core correctness claim, swept over positions and depths."""
     for board in AGREEMENT_POSITIONS:
         for is_maximizing in (True, False):
             expected = mm.minimax(board, depth, is_maximizing)
@@ -122,8 +112,8 @@ def test_agrees_with_minimax_on_value(depth):
 
 @pytest.mark.parametrize("depth", [2, 4])
 def test_agrees_with_minimax_under_left_to_right_order(depth):
-    """Same claim with ordering held identical to minimax's, which isolates the
-    pruning logic from the ordering change."""
+    """Same claim with ordering held identical to minimax's, which isolates the pruning
+    logic from the ordering change."""
     for board in AGREEMENT_POSITIONS:
         expected = mm.minimax(board, depth, True)
         actual = alphabeta(board, depth, True, order=LEFT_TO_RIGHT)
@@ -138,7 +128,7 @@ def test_takes_immediate_win():
 
 
 def test_blocks_immediate_loss():
-    """Also a unique best move. Needs depth >= 2."""
+    """Also a unique best move."""
     col, _ = ab.best_move(y_can_win_in_one(), 2, True)
     assert col == 3
 
@@ -155,22 +145,14 @@ def test_terminal_and_draw_scoring_match_minimax():
 # --------------------------------------------------------------------------
 
 def test_pruning_visits_strictly_fewer_nodes():
-    """Same position, same depth, same ordering — only the algorithm differs.
-
-    Holding the ordering fixed at LEFT_TO_RIGHT makes this a measurement of
-    pruning alone.
-    """
+    """Same position, same depth, same ordering - only the algorithm differs."""
     plain = count_minimax(Board(), 4, True)
     pruned = count_alphabeta(Board(), 4, True, order=LEFT_TO_RIGHT)
     assert pruned < plain
 
 
 def test_node_counter_resets():
-    """Two identical searches must report the same count.
-
-    Catches a counter that accumulates across searches, which would make every
-    later comparison meaningless — and would make pruning appear to lose.
-    """
+    """Two identical searches must report the same count."""
     first = count_alphabeta(Board(), 3, True)
     second = count_alphabeta(Board(), 3, True)
     assert first == second
@@ -181,11 +163,7 @@ def test_node_counter_resets():
 
 
 def test_pruning_advantage_grows_with_depth():
-    """The saving should widen as depth increases — the b^(d/2) vs b^d gap.
-
-    A fixed saving at one depth could be luck; a widening ratio is the
-    complexity difference becoming visible.
-    """
+    """The saving should widen as depth increases - the b^(d/2) vs b^d gap."""
     def ratio(depth: int) -> float:
         plain = count_minimax(Board(), depth, True)
         pruned = count_alphabeta(Board(), depth, True, order=LEFT_TO_RIGHT)
@@ -199,11 +177,7 @@ def test_pruning_advantage_grows_with_depth():
 # --------------------------------------------------------------------------
 
 def test_centre_first_ordering_visits_fewer_nodes():
-    """Same algorithm, same depth, same position — only the order differs.
-
-    This is what proves COLUMN_ORDER earns its place rather than just looking
-    principled.
-    """
+    """Same algorithm, same depth, same position - only the order differs."""
     centre_first = count_alphabeta(Board(), 5, True, order=COLUMN_ORDER)
     left_to_right = count_alphabeta(Board(), 5, True, order=LEFT_TO_RIGHT)
     assert centre_first < left_to_right
@@ -214,12 +188,7 @@ def test_centre_first_ordering_visits_fewer_nodes():
 # --------------------------------------------------------------------------
 
 def test_search_leaves_board_unchanged():
-    """Pruning breaks out of loops early — every early exit must still undo.
-
-    This is the make/undo risk plain minimax doesn't have: a `break` placed
-    before the undo_move would corrupt the board on exactly the paths that get
-    pruned, which are the paths hardest to notice.
-    """
+    """Pruning breaks out of loops early - every early exit must still undo."""
     for order in (COLUMN_ORDER, LEFT_TO_RIGHT):
         board = play([(3, R), (3, Y), (4, R)])
         grid_before = [row[:] for row in board.grid]
@@ -256,10 +225,7 @@ def test_best_move_on_full_board_returns_none():
 
 
 def test_best_move_agrees_with_minimax_on_forced_positions():
-    """Where the best move is unique, both searches must name the same column.
-
-    Ties are excluded deliberately — see the module docstring.
-    """
+    """Where the best move is unique, both searches must name the same column."""
     for board, expected in [(r_can_win_in_one(), 3), (y_can_win_in_one(), 3)]:
         assert mm.best_move(board, 2, True)[0] == expected
         assert ab.best_move(board, 2, True)[0] == expected

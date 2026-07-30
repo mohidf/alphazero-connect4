@@ -1,27 +1,19 @@
-"""PUCT search: MCTS guided by a policy prior and a value estimate.
+"""PUCT: MCTS steered by the network instead of random rollouts.
 
-Three things change from the vanilla MCTS in mcts.py:
+Differences from mcts.py:
 
-* **No rollout.** A leaf's value comes from one evaluator call instead of 42
-  random moves. That is the whole efficiency win.
-* **Priors steer exploration.** UCB1 knew only visit counts, so an unvisited node
-  had to score infinity. PUCT weights exploration by the policy's prior, so all
-  children are created at once and ranked from the start.
-* **Values are signed by perspective.** Every node's statistics are stored from
-  the perspective of the player to move *at that node*, so the value flips sign
-  at every level of the backup.
+- no rollout, the value comes from one evaluator call
+- the policy prior decides what to explore, so all children get made at once
+- every node's stats are from the point of view of whoever moves there, so the
+  value flips sign on the way back up
 
-The evaluator is a plain callable, ``(board, player) -> (priors, value)``, rather
-than a network. The search does not care where the numbers come from, which makes
-it testable with stubs and lets a batched or cached evaluator drop in later.
-Use network_evaluator() to wrap a Connect4Net.
+Child selection score, from the parent's side:
 
-Selection score for a child, from the parent's point of view:
+    -child.Q + c_puct * child.prior * sqrt(parent.visits) / (1 + child.visits)
 
-    -child.Q  +  c_puct * child.prior * sqrt(parent.visits) / (1 + child.visits)
-
-The leading minus is the sign flip: a child's Q is stored from the child's
-mover's perspective, and that is the opponent of the parent's mover.
+The minus is that sign flip. The evaluator is just a callable taking
+(board, player) and returning (priors, value), which makes it easy to swap in
+stubs for tests or a cached version later.
 """
 
 from typing import Callable
@@ -33,29 +25,23 @@ from connect4.encoding import legal_move_mask, mask_and_normalise
 from connect4.mcts import other
 from connect4.network import Connect4Net, predict
 
-# Exploration strength. Higher trusts the prior less and spreads visits wider.
+# Higher spreads visits wider.
 C_PUCT = 1.5
 
-# Root exploration noise. AlphaZero scales alpha roughly as 10 / (legal moves),
-# which lands near 1.0 for Connect-4's seven columns. Without this, self-play
-# collapses into replaying the same game and the training set stops growing.
+# Noise added at the root during self-play. Without it every game comes out the
+# same and the training set stops growing.
 DIRICHLET_ALPHA = 1.0
 DIRICHLET_WEIGHT = 0.25
 
-# (priors over COLS, value in [-1, 1] for the player to move)
 Evaluator = Callable[[Board, str], tuple[np.ndarray, float]]
 
 
 class Node:
-    """One position in the search tree.
+    """A position in the tree.
 
-    `visits` and `value_sum` are stored from the perspective of
-    `player_to_move` — the player about to move *at this node*. So Q > 0 means
-    "good for whoever is on the move here", which is the same convention the
-    network's value head uses.
-
-    `prior` is P(s, a) for the move that leads here, taken from the parent's
-    policy. The root's prior is unused.
+    Stats are from the point of view of player_to_move, so Q > 0 means good for
+    whoever moves here. prior is the parent policy's probability for the move
+    that led here; the root's is unused.
     """
 
     __slots__ = (
@@ -92,18 +78,14 @@ class Node:
 
     @property
     def q(self) -> float:
-        """Mean value from this node's mover's perspective; 0 when unvisited.
-
-        Returning 0 for an unvisited node makes PUCT treat it as even rather than
-        as infinitely attractive. The prior term is what gets it explored, which
-        is the whole reason UCB1's "infinity for unvisited" is not needed here.
-        """
+        """Average value here. Unvisited returns 0, not infinity like UCB1 -
+        the prior term is what gets new children explored."""
         if self.visits == 0:
             return 0.0
         return self.value_sum / self.visits
 
     def puct_score(self, c_puct: float = C_PUCT) -> float:
-        """Selection score for this node, from its *parent's* perspective."""
+        """Score used to pick this child, from the parent's side."""
         exploration = (
             c_puct * self.prior * np.sqrt(self.parent.visits) / (1 + self.visits)
         )
@@ -111,7 +93,7 @@ class Node:
 
 
 def network_evaluator(net: Connect4Net) -> Evaluator:
-    """Adapt a Connect4Net to the Evaluator interface."""
+    """Wrap a network so the search can call it."""
 
     def evaluate(board: Board, player: str) -> tuple[np.ndarray, float]:
         return predict(net, board, player)
@@ -120,14 +102,11 @@ def network_evaluator(net: Connect4Net) -> Evaluator:
 
 
 def caching_evaluator(evaluator: Evaluator, capacity: int = 200_000) -> Evaluator:
-    """Memoise an evaluator on (position, player to move).
+    """Remember evaluations, keyed on the position and whose turn it is.
 
-    Worth it wherever searches run one at a time and cannot be batched — arena
-    games especially, where consecutive moves re-search overlapping subtrees.
-    Positions also repeat within a single tree via different move orders.
-
-    The cache is only valid for one fixed network: build a new one whenever the
-    weights change, or it will serve a previous network's opinions.
+    Helps when searches run one at a time and can't be batched, since successive
+    moves in a game re-search a lot of the same tree. Only valid for one set of
+    weights - make a new one when the network changes.
     """
     cache: dict[tuple, tuple[np.ndarray, float]] = {}
 
@@ -146,20 +125,16 @@ def caching_evaluator(evaluator: Evaluator, capacity: int = 200_000) -> Evaluato
 
 
 def uniform_evaluator(board: Board, player: str) -> tuple[np.ndarray, float]:
-    """A network-free evaluator: flat priors, neutral value.
-
-    Useful as a baseline — PUCT with this still plays respectably, because
-    terminal values inside the tree are exact regardless of the evaluator.
-    """
+    """No network: flat priors and a neutral value. Still plays reasonably,
+    because wins found inside the tree are exact either way."""
     return np.full(COLS, 1.0 / COLS, dtype=np.float32), 0.0
 
 
 def terminal_value(board: Board, player_to_move: str) -> float:
-    """Exact value of a finished position, from `player_to_move`'s perspective.
+    """Value of a finished position for whoever is to move.
 
-    In practice this always returns 0.0 or -1.0: a win is created by the move
-    that just happened, so the player now on the move is the one who lost. The
-    +1.0 branch is kept for correctness rather than reachability.
+    Almost always 0 or -1: whoever just moved is the one who won, so the player
+    on the move is the loser. The +1 case is there for completeness.
     """
     winner = board.winner()
     if winner is None:
@@ -168,19 +143,15 @@ def terminal_value(board: Board, player_to_move: str) -> float:
 
 
 def select_child(node: Node, c_puct: float = C_PUCT) -> Node:
-    """Return the child with the highest PUCT score."""
+    """Child with the best PUCT score."""
     return max(node.children.values(), key=lambda child: child.puct_score(c_puct))
 
 
 def expand_with(node: Node, priors: np.ndarray) -> None:
-    """Create every legal child of `node`, carrying masked-and-normalised priors.
+    """Make all the legal children at once, with their priors.
 
-    Split out from expand() so a caller that already has the evaluation — because
-    it batched several positions together — can apply it without calling an
-    evaluator again.
-
-    Unlike vanilla MCTS this creates all children at once: the priors rank them,
-    so there is no need to try them one at a time.
+    Separate from expand() so a caller that already has the evaluation from a
+    batch can use it without calling the evaluator again.
     """
     priors = mask_and_normalise(np.asarray(priors), legal_move_mask(node.board))
     opponent = other(node.player_to_move)
@@ -198,22 +169,17 @@ def expand_with(node: Node, priors: np.ndarray) -> None:
 
 
 def expand(node: Node, evaluator: Evaluator) -> float:
-    """Evaluate `node`, create its children, and return the value.
-
-    The returned value is from `node`'s mover's perspective, ready for backup().
-    """
+    """Evaluate the node, make its children, return the value for backup()."""
     priors, value = evaluator(node.board, node.player_to_move)
     expand_with(node, priors)
     return value
 
 
 def backup(node: Node | None, value: float) -> None:
-    """Add one visit and `value` at each node from `node` up to the root.
+    """Walk up to the root adding a visit and the value at each step.
 
-    `value` flips sign at every level: it arrives from the perspective of the
-    leaf's mover, and each step up the tree changes whose turn it is. Dropping
-    the flip gives a search that confidently prefers losing moves — the same bug
-    as crediting the wrong player in vanilla MCTS backpropagate().
+    The sign flips every level, since whose turn it is alternates. Miss that and
+    the search confidently picks losing moves.
     """
     while node is not None:
         node.visits += 1
@@ -228,12 +194,8 @@ def add_dirichlet_noise(
     weight: float = DIRICHLET_WEIGHT,
     rng: np.random.Generator | None = None,
 ) -> None:
-    """Mix Dirichlet noise into the root's priors, in place.
-
-    Only at the root, and only during self-play: it is there to force variety
-    into the training set, not to improve play. Applying it during evaluation
-    would just make the agent weaker.
-    """
+    """Mix noise into the root priors. Self-play only - it is there for variety
+    in the training data, and would just weaken the agent during evaluation."""
     rng = rng if rng is not None else np.random.default_rng()
     columns = list(root.children)
     noise = rng.dirichlet([alpha] * len(columns))
@@ -252,11 +214,10 @@ def run_search(
     add_noise: bool = False,
     rng: np.random.Generator | None = None,
 ) -> Node:
-    """Run `simulations` PUCT iterations and return the root.
+    """Run the search and return the root.
 
-    The root is expanded before the loop so noise can be applied to real priors;
-    that expansion is not backed up, so root.visits ends up exactly
-    `simulations`. A terminal root is left unexpanded and gains no children.
+    The root is expanded first so noise has real priors to mix into. That
+    expansion is not backed up, so root.visits ends up equal to `simulations`.
     """
     root = Node(board.copy(), player)
 
@@ -268,11 +229,11 @@ def run_search(
     for _ in range(simulations):
         node = root
 
-        # SELECT: descend while the node has children to choose between.
+        # descend
         while node.is_expanded and not node.board.is_terminal():
             node = select_child(node, c_puct)
 
-        # EVALUATE: exact value at a finished position, evaluator otherwise.
+        # exact value if the game is over there, otherwise ask the evaluator
         if node.board.is_terminal():
             value = terminal_value(node.board, node.player_to_move)
         else:
@@ -284,7 +245,7 @@ def run_search(
 
 
 def visit_counts(root: Node) -> np.ndarray:
-    """Raw visit counts as a float32 array of shape (COLS,); 0 for illegal moves."""
+    """Visit count per column, 0 for illegal ones."""
     counts = np.zeros(COLS, dtype=np.float32)
     for col, child in root.children.items():
         counts[col] = child.visits
@@ -292,14 +253,11 @@ def visit_counts(root: Node) -> np.ndarray:
 
 
 def policy_target(root: Node, temperature: float = 1.0) -> np.ndarray:
-    """Normalised visit counts — the search's improved policy, i.e. the pi target.
+    """Visit counts normalised into a distribution - the training target.
 
-    This is policy improvement by planning: the network proposed `prior`, the
-    search spent its budget checking, and the resulting visit distribution is
-    better than what the network started with. Training toward it is what makes
-    the loop learn.
-
-    temperature 0 puts all mass on the most-visited move.
+    The network suggested the priors, the search checked them, and this is what
+    came out. It is better than what the network started with, which is what
+    there is to learn from. temperature 0 gives one-hot.
     """
     counts = visit_counts(root)
     if counts.sum() == 0:
@@ -319,11 +277,10 @@ def select_move(
     temperature: float = 0.0,
     rng: np.random.Generator | None = None,
 ) -> int:
-    """Choose a move from the root's visit counts.
+    """Pick a move from the visit counts.
 
-    temperature 0 takes the most-visited move — correct for evaluation and for
-    the later part of a self-play game. temperature 1 samples proportional to
-    visits, which is what generates variety in the opening.
+    temperature 0 takes the most visited. 1 samples in proportion, which is how
+    self-play games end up different from each other.
     """
     if not root.children:
         raise ValueError("no legal moves at the root")
@@ -343,7 +300,7 @@ def puct_move(
     simulations: int = 200,
     c_puct: float = C_PUCT,
 ) -> int | None:
-    """Return the column PUCT favours, or None if there are no legal moves."""
+    """Best column, or None if the board is full."""
     root = run_search(board, player, evaluator, simulations, c_puct)
     if not root.children:
         return None
@@ -351,23 +308,18 @@ def puct_move(
 
 
 class Search:
-    """A PUCT search that can be paused whenever it needs an evaluation.
+    """A search that stops and waits whenever it needs an evaluation.
 
-    run_search() calls the evaluator itself, which forces one network call per
-    simulation — a batch of one, where kernel-launch overhead dwarfs the actual
-    arithmetic. This class inverts that: it descends to a leaf, hands it back, and
-    waits. A driver can therefore run many searches side by side and evaluate all
-    of their pending leaves in a single batched forward pass.
+    run_search() calls the evaluator itself, one position at a time, which wastes
+    most of the GPU. This hands the leaf back instead, so a caller can run lots of
+    games at once and evaluate all their leaves in one batch.
 
-    Each Search has at most one leaf outstanding at a time, so no virtual loss is
-    needed — the parallelism is across games, not within a single tree.
+    Only one leaf is outstanding per search, so there is no need for virtual loss -
+    the parallelism is across games, not inside one tree.
 
-    Usage:
         search = Search(board, player)
-        leaf = search.pending_leaf()          # root, needing evaluation
-        search.resolve(priors, value)
         while search.simulations_done < n:
-            leaf = search.pending_leaf()      # None if it finished on a terminal
+            leaf = search.pending_leaf()   # None if it hit a finished position
             if leaf is not None:
                 search.resolve(priors, value)
     """
@@ -381,15 +333,12 @@ class Search:
 
     @property
     def finished(self) -> bool:
-        """True when the root is terminal, so no search is possible at all."""
+        """Root is already a finished game, so there is nothing to search."""
         return self.root.board.is_terminal()
 
     def pending_leaf(self) -> Node | None:
-        """Advance to the next position needing evaluation, or None if none does.
-
-        Returns None when the simulation resolved without an evaluation — either
-        it ended on a terminal position, or the root itself is terminal.
-        """
+        """Next position needing an evaluation, or None if this simulation
+        finished without one (it hit the end of a game)."""
         if self._pending is not None:
             raise RuntimeError("a leaf is already awaiting resolve()")
 
@@ -401,8 +350,7 @@ class Search:
             self.simulations_done += 1
             return None
 
-        # The root is expanded before any simulation is counted, matching
-        # run_search, so root.visits ends up equal to the simulation count.
+        # Root gets expanded before any simulation counts, same as run_search.
         if not self._root_expanded:
             self._pending = self.root
             return self.root
@@ -420,7 +368,7 @@ class Search:
         return node
 
     def resolve(self, priors: np.ndarray, value: float) -> None:
-        """Apply an evaluation to the outstanding leaf."""
+        """Hand back an evaluation for the leaf we are waiting on."""
         node = self._pending
         if node is None:
             raise RuntimeError("resolve() called with no leaf outstanding")
@@ -429,7 +377,7 @@ class Search:
         self._pending = None
 
         if node is self.root and not self._root_expanded:
-            # Root expansion is setup, not a simulation: it is not backed up.
+            # Setup, not a simulation, so no backup.
             self._root_expanded = True
             return
 
@@ -442,7 +390,7 @@ class Search:
         weight: float = DIRICHLET_WEIGHT,
         rng: np.random.Generator | None = None,
     ) -> None:
-        """Apply root Dirichlet noise. Only valid once the root is expanded."""
+        """Add root noise. The root has to be expanded first."""
         if not self._root_expanded:
             raise RuntimeError("expand the root before adding noise")
         add_dirichlet_noise(self.root, alpha, weight, rng)

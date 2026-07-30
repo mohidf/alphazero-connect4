@@ -1,12 +1,8 @@
-"""Tests for the policy + value network.
+"""Tests for the network.
 
-An untrained network has no opinions worth asserting, so these tests are about
-**contracts, not quality**: shapes, ranges, determinism, device handling, and
-round-tripping through disk. Every one holds before training starts and must keep
-holding afterwards.
-
-Tests run on CPU regardless of CUDA availability — they should be fast and
-identical everywhere. The one device test is skipped when there's no GPU.
+An untrained network has no opinions worth checking, so these are about shapes,
+ranges, determinism, devices and saving/loading. All on CPU so they're fast and
+the same everywhere.
 """
 
 import numpy as np
@@ -72,8 +68,8 @@ def test_residual_block_preserves_shape():
 
 
 def test_residual_block_is_not_the_identity():
-    """Shape-preserving but not a no-op — catches a forward() that returns its
-    input untouched, which would pass every shape test in this file."""
+    """Shape-preserving but not a no-op - catches a forward() that returns its input
+    untouched, which would pass every shape test in this file."""
     torch.manual_seed(0)
     block = ResidualBlock(CHANNELS).eval()
     x = torch.randn(4, CHANNELS, ROWS, COLS)
@@ -81,8 +77,7 @@ def test_residual_block_is_not_the_identity():
 
 
 def test_residual_block_passes_gradients_to_its_input():
-    """The skip connection's whole purpose. A None or all-zero input gradient
-    means the residual path isn't wired up."""
+    """The skip connection's whole purpose."""
     torch.manual_seed(0)
     block = ResidualBlock(CHANNELS).eval()
     x = torch.randn(2, CHANNELS, ROWS, COLS, requires_grad=True)
@@ -94,8 +89,7 @@ def test_residual_block_passes_gradients_to_its_input():
 
 
 def test_residual_block_does_not_mutate_its_input():
-    """`out += x` is in-place on the block's own intermediate, not on x. If that
-    ever changes, the trunk starts corrupting the tensor it was handed."""
+    """`out += x` is in-place on the block's own intermediate, not on x."""
     torch.manual_seed(0)
     block = ResidualBlock(CHANNELS).eval()
     x = torch.randn(2, CHANNELS, ROWS, COLS)
@@ -111,11 +105,7 @@ def test_residual_block_does_not_mutate_its_input():
 # --------------------------------------------------------------------------
 
 def test_forward_returns_the_declared_shapes(net):
-    """(B, 2, 6, 7) -> policy (B, 7), value (B,).
-
-    The value shape matters more than it looks: returning (B, 1) doesn't raise,
-    it broadcasts against (B,) targets into a (B, B) loss matrix.
-    """
+    """(B, 2, 6, 7) -> policy (B, 7), value (B,)."""
     logits, value = net(batch_of(8))
     assert logits.shape == (8, ACTION_SIZE)
     assert value.shape == (8,)
@@ -136,22 +126,21 @@ def test_forward_handles_a_large_batch(net):
 
 
 def test_value_is_within_tanh_range(net):
-    """Strictly inside [-1, 1] — a missing tanh shows up here immediately."""
+    """Strictly inside [-1, 1] - a missing tanh shows up here immediately."""
     _, value = net(batch_of(64))
     assert value.abs().lt(1.0).all()
 
 
 def test_policy_output_is_logits_not_probabilities(net):
-    """Raw logits must NOT already sum to 1, or a softmax has leaked into
-    forward() and training would apply it twice."""
+    """Raw logits must NOT already sum to 1, or a softmax has leaked into forward() and
+    training would apply it twice."""
     logits, _ = net(batch_of(16))
     assert not torch.allclose(logits.sum(dim=-1), torch.ones(16), atol=1e-3)
     assert (logits < 0).any()
 
 
 def test_forward_is_deterministic_in_eval_mode(net):
-    """Two identical calls give identical results. Catches dropout or BatchNorm
-    left in training mode."""
+    """Two identical calls give identical results."""
     x = batch_of(8)
     first = net(x)
     second = net(x)
@@ -160,12 +149,7 @@ def test_forward_is_deterministic_in_eval_mode(net):
 
 
 def test_rows_of_the_batch_are_independent(net):
-    """Position i's output must not depend on what else is in the batch.
-
-    This is what BatchNorm in train() mode breaks, and it's the single most likely
-    cause of "the search works but training doesn't". Nothing about the shapes is
-    wrong when it fails.
-    """
+    """Position i's output must not depend on what else is in the batch."""
     target = encode(sample_position(), PLAYER_R)
     alone = torch.from_numpy(target[None])
     padded = torch.cat([alone, torch.from_numpy(np.stack([
@@ -184,7 +168,7 @@ def test_rows_of_the_batch_are_independent(net):
 # --------------------------------------------------------------------------
 
 def test_predict_returns_probabilities_and_a_scalar(net):
-    """Priors: shape (7,), summing to 1. Value: a plain float, not a tensor."""
+    """Priors: shape (7,), summing to 1."""
     priors, value = predict(net, sample_position(), PLAYER_R)
 
     assert isinstance(priors, np.ndarray)
@@ -195,15 +179,15 @@ def test_predict_returns_probabilities_and_a_scalar(net):
 
 
 def test_predict_priors_are_non_negative(net):
-    """mask_and_normalise() rejects negative priors, so predict() must have
-    applied softmax before handing them over."""
+    """mask_and_normalise() rejects negative priors, so predict() must have applied softmax
+    before handing them over."""
     priors, _ = predict(net, sample_position(), PLAYER_R)
     assert (priors >= 0).all()
 
 
 def test_predict_does_not_mask_illegal_moves(net):
-    """Masking is the search's job — it's the only caller that knows the position
-    in context. A full column may still carry prior mass here."""
+    """Masking is the search's job - it's the only caller that knows the position in
+    context."""
     board = play_alternating([3] * ROWS)
     assert 3 not in board.available_moves()
 
@@ -228,8 +212,8 @@ def test_predict_agrees_with_forward(net):
 
 
 def test_predict_leaves_the_network_in_eval_mode(net):
-    """A predict() that flips to train() and forgets to flip back would poison
-    every later call."""
+    """A predict() that flips to train() and forgets to flip back would poison every later
+    call."""
     net.train()
     predict(net, sample_position(), PLAYER_R)
     assert net.training is False
@@ -246,13 +230,7 @@ def test_predict_does_not_mutate_the_board(net):
 
 
 def test_predict_does_not_build_a_graph(net):
-    """Asserted by forcing grad to be enabled at the call site.
-
-    Without @torch.no_grad the output tensor would require grad, and .numpy() on
-    such a tensor raises. So this passing is proof the decorator is in place —
-    and without it, self-play would accumulate a graph across thousands of
-    simulations until VRAM ran out.
-    """
+    """Asserted by forcing grad to be enabled at the call site."""
     with torch.enable_grad():
         priors, value = predict(net, sample_position(), PLAYER_R)
 
@@ -265,8 +243,7 @@ def test_predict_does_not_build_a_graph(net):
 # --------------------------------------------------------------------------
 
 def test_colour_mirrored_positions_predict_identically(net):
-    """The encoding guarantees identical input, so the network must give identical
-    output. Fails if anything downstream reintroduced colour."""
+    """The encoding guarantees identical input, so the network must give identical output."""
     board = sample_position()
 
     priors_r, value_r = predict(net, board, PLAYER_R)
@@ -277,11 +254,7 @@ def test_colour_mirrored_positions_predict_identically(net):
 
 
 def test_predict_batch_matches_predict_one_by_one(net):
-    """Batched and single evaluation must agree.
-
-    If they don't, either batching has a shape bug or BatchNorm is mixing
-    positions together — and every later speedup depends on these matching.
-    """
+    """Batched and single evaluation must agree."""
     boards = [sample_position(), *other_positions()]
     players = [PLAYER_R, PLAYER_Y, PLAYER_R, PLAYER_Y, PLAYER_R]
 
@@ -311,8 +284,7 @@ def test_predict_batch_on_a_single_position(net):
 
 
 def test_predict_batch_rejects_mismatched_lengths(net):
-    """One player per board. Silently zipping to the shorter list would evaluate
-    positions from the wrong perspective — which trains, and trains wrong."""
+    """One player per board."""
     with pytest.raises(ValueError):
         predict_batch(net, [Board(), Board()], [PLAYER_R])
 
@@ -340,20 +312,15 @@ def test_save_and_load_round_trip(tmp_path, net):
 
 
 def test_loaded_network_is_in_eval_mode(tmp_path, net):
-    """Loading a checkpoint and forgetting eval() gives a network whose
-    predictions depend on batch composition. load() must not leave that trap."""
+    """Loading a checkpoint and forgetting eval() gives a network whose predictions depend
+    on batch composition. load() must not leave that trap."""
     path = tmp_path / "ckpt.pt"
     save(net, path)
     assert load(path, CPU).training is False
 
 
 def test_save_writes_a_state_dict_not_a_pickled_module(tmp_path, net):
-    """The checkpoint must not embed the class. Pickling the module ties the file
-    to this exact class definition, so any later refactor bricks old checkpoints.
-
-    weights_only=True refuses to unpickle arbitrary objects, so a module-pickled
-    checkpoint fails to load at all here.
-    """
+    """The checkpoint must not embed the class."""
     path = tmp_path / "ckpt.pt"
     save(net, path)
 
@@ -366,8 +333,8 @@ def test_save_writes_a_state_dict_not_a_pickled_module(tmp_path, net):
 
 
 def test_load_rejects_an_incompatible_encoding(tmp_path, net):
-    """planes and action_size are the encoding contract and cannot vary — the
-    weights would describe a different game representation."""
+    """planes and action_size are the encoding contract and cannot vary - the weights would
+    describe a different game representation."""
     path = tmp_path / "ckpt.pt"
     save(net, path)
 
@@ -380,11 +347,7 @@ def test_load_rejects_an_incompatible_encoding(tmp_path, net):
 
 
 def test_load_rejects_weights_that_contradict_the_recorded_architecture(tmp_path, net):
-    """A checkpoint claiming a width its own tensors don't have.
-
-    Raised as ValueError naming the problem, rather than torch's wall of
-    per-tensor shape mismatches.
-    """
+    """A checkpoint claiming a width its own tensors don't have."""
     path = tmp_path / "ckpt.pt"
     save(net, path)
 
@@ -397,8 +360,8 @@ def test_load_rejects_weights_that_contradict_the_recorded_architecture(tmp_path
 
 
 def test_load_accepts_a_legitimately_different_size(tmp_path):
-    """Width and depth come *from* the checkpoint: training a smaller or larger
-    net later is legitimate, and a stricter check would reject a valid file."""
+    """Width and depth come from the checkpoint: training a smaller or larger net later is
+    legitimate, and a stricter check would reject a valid file."""
     torch.manual_seed(0)
     small = Connect4Net(channels=CHANNELS // 2, blocks=BLOCKS // 2).eval()
     path = tmp_path / "small.pt"
@@ -416,15 +379,13 @@ def test_load_accepts_a_legitimately_different_size(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_parameter_count_is_in_a_sane_range(net):
-    """Bounded on both sides. Far too small means the trunk didn't get built; far
-    too large means a fully-connected layer is eating the whole 6x7 grid."""
+    """Bounded on both sides."""
     total = count_parameters(net)
     assert 50_000 < total < 2_000_000
 
 
 def test_heads_are_a_small_fraction_of_the_model(net):
-    """The 1x1 reductions exist so the heads don't dominate. If a head is ever
-    wired straight off the flattened trunk this jumps by an order of magnitude."""
+    """The 1x1 reductions exist so the heads don't dominate."""
     head_params = sum(
         p.numel()
         for name, p in net.named_parameters()
@@ -435,11 +396,7 @@ def test_heads_are_a_small_fraction_of_the_model(net):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
 def test_predict_works_on_cuda():
-    """Inputs must be moved to the network's device, not assumed to be on CPU.
-
-    Also checks nothing leaks out as a CUDA tensor — that would force every
-    downstream consumer to become device-aware.
-    """
+    """Inputs must be moved to the network's device, not assumed to be on CPU."""
     torch.manual_seed(0)
     cuda_net = Connect4Net().to(torch.device("cuda")).eval()
 

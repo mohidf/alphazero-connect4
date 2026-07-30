@@ -1,9 +1,8 @@
-"""Tests for the evaluation arena.
+"""Tests for the arena.
 
-The arena is the only honest measure of progress — self-play loss is measured
-against targets that move every iteration. So its bookkeeping has to be right,
-and the thing most likely to be wrong is **which side won**, given that the
-challenger alternates colours between games.
+The thing most likely to be wrong is which side won, since the challenger swaps
+colours between games. The rest is about openings being randomised, without which
+a match of two deterministic agents is just the same game repeated.
 """
 
 import numpy as np
@@ -77,7 +76,7 @@ def test_play_game_runs_to_a_terminal_position():
 
 
 def test_the_second_agent_plays_yellow():
-    """Mirror of the test above — whoever moves second is Y and should lose here."""
+    """Mirror of the test above - whoever moves second is Y and should lose here."""
     assert play_game(fixed_column_agent(1), fixed_column_agent(0)) == PLAYER_R
 
 
@@ -91,12 +90,8 @@ def test_match_plays_the_requested_number_of_games():
 
 
 def test_match_alternates_who_moves_first():
-    """The whole point of alternating: Connect-4 is a first-player win with
-    perfect play, so a fixed seat would flatter one side.
-
-    Both agents stack a column, so whoever moves first wins. Over an even number
-    of games that must come out exactly level.
-    """
+    """Connect 4 is a first-player win with perfect play,
+    so a fixed seat would flatter one side."""
     result = play_match(fixed_column_agent(0), fixed_column_agent(1), games=8, opening_plies=0)
 
     assert result.wins == 4
@@ -105,12 +100,7 @@ def test_match_alternates_who_moves_first():
 
 
 def test_match_attributes_wins_to_the_challenger_in_both_seats():
-    """A strictly stronger challenger must score 1.0 regardless of colour.
-
-    Depth-4 alpha-beta against an agent that always plays the leftmost column: it
-    should win every game from either seat. If colour attribution were inverted,
-    this would read 0.0 — and an inverted arena silently rejects every good network.
-    """
+    """A strictly stronger challenger must score 1.0 regardless of colour."""
     result = play_match(alphabeta_agent(4), first_legal_agent, games=4, opening_plies=0)
     assert result.score == 1.0
     assert result.losses == 0
@@ -140,19 +130,15 @@ def test_alphabeta_agent_takes_an_immediate_win():
 
 
 def test_alphabeta_agent_plays_both_colours():
-    """is_maximizing has to follow the colour, not be hardcoded.
-
-    From Y's side in a position where R threatens to complete the bottom row, the
-    only sane move is to block column 3.
-    """
+    """is_maximizing has to follow the colour, not be hardcoded."""
     from tests.test_minimax import r_can_win_in_one
 
     assert alphabeta_agent(2)(r_can_win_in_one(), PLAYER_Y) == 3
 
 
 def test_network_agent_only_plays_legal_columns():
-    """Players must alternate: five moves by one colour makes four in a row, the
-    board goes terminal, and puct_move() correctly returns None."""
+    """Players must alternate: five moves by one colour makes four in a row, the board goes
+    terminal, and puct_move() correctly returns None."""
     from connect4.mcts import other
 
     torch.manual_seed(0)
@@ -180,7 +166,7 @@ def test_network_agent_finds_a_forced_win_untrained():
 
 
 def test_untrained_network_beats_random():
-    """A floor, not a milestone. Failing this means something is broken."""
+    """A floor, not a milestone."""
     torch.manual_seed(0)
     net = Connect4Net().to(CPU).eval()
 
@@ -194,7 +180,7 @@ def test_untrained_network_beats_random():
 
 
 # --------------------------------------------------------------------------
-# randomised openings — what makes a match of deterministic agents informative
+# randomised openings - what makes a match of deterministic agents informative
 # --------------------------------------------------------------------------
 
 def distinct_games(challenger, incumbent, games, rng, opening_plies):
@@ -227,11 +213,7 @@ def distinct_games(challenger, incumbent, games, rng, opening_plies):
 
 
 def test_deterministic_agents_replay_the_same_two_games_without_openings():
-    """The flaw this feature exists to fix, pinned so it cannot come back.
-
-    Two deterministic agents and no opening randomisation means a 12-game match
-    carries two games' worth of information, however the score reads.
-    """
+    """The flaw this feature exists to fix, pinned so it cannot come back."""
     seen = distinct_games(
         alphabeta_agent(2), first_legal_agent, 12, np.random.default_rng(0), 0
     )
@@ -239,11 +221,7 @@ def test_deterministic_agents_replay_the_same_two_games_without_openings():
 
 
 def test_randomised_openings_make_the_games_distinct():
-    """Same agents, same game count — now many distinct games.
-
-    Six openings, each played from both sides, so at most 12 and comfortably
-    more than 2.
-    """
+    """Same agents, same game count - now many distinct games."""
     seen = distinct_games(
         alphabeta_agent(2), first_legal_agent, 12, np.random.default_rng(0),
         DEFAULT_OPENING_PLIES,
@@ -252,8 +230,8 @@ def test_randomised_openings_make_the_games_distinct():
 
 
 def test_random_opening_is_legal_and_never_terminal():
-    """The earliest possible win is ply 7, so a shorter opening cannot be a
-    finished game — otherwise a match would score openings, not agents."""
+    """The earliest possible win is ply 7, so a shorter opening cannot be a finished game -
+    otherwise a match would score openings, not agents."""
     from connect4.mcts import other
 
     rng = np.random.default_rng(0)
@@ -274,11 +252,7 @@ def test_random_opening_rejects_lengths_that_could_be_terminal():
 
 
 def test_openings_are_paired_across_the_seats():
-    """Both agents must face each opening from both sides.
-
-    A single random opening can be lopsided; playing it twice with the seats
-    swapped is what makes that cancel instead of deciding the match.
-    """
+    """Both agents must face each opening from both sides."""
     seen = distinct_games(
         alphabeta_agent(2), first_legal_agent, 4, np.random.default_rng(1),
         DEFAULT_OPENING_PLIES,

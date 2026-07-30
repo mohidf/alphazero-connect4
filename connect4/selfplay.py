@@ -1,21 +1,14 @@
-"""Self-play game generation: turn a network into training data.
+"""Playing games against itself to make training data.
 
-Each position visited in a game becomes one training sample:
+Every position in a game becomes one sample:
 
-    state   the canonical encoding of the position
-    policy  the search's visit distribution — the *improved* policy
-    value   the eventual game result, from that position's mover's perspective
+    state   the encoded board
+    policy  what the search decided, i.e. its visit counts
+    value   who ended up winning, from that position's point of view
 
-The policy target is the interesting one. The network proposed `prior`, the search
-spent its budget checking, and the resulting visit distribution is better than
-what the network started with. Training toward it is policy improvement by
-planning; the value target closes the loop by grounding it in actual outcomes.
-
-Games are generated **many at a time** so their pending evaluations can be batched
-into one forward pass. A batch-of-one forward pass is almost entirely kernel-launch
-overhead, so this is the difference between a self-play iteration taking minutes
-and taking an hour. The parallelism is across games — each search has at most one
-leaf outstanding — so no virtual loss is needed.
+Games run many at a time so all their pending evaluations can go through the
+network in one batch. Doing them one at a time is mostly launch overhead and
+takes roughly five times as long.
 """
 
 from dataclasses import dataclass
@@ -35,13 +28,11 @@ from connect4.puct import (
     select_move,
 )
 
-# Plies played at temperature 1 (sampled proportional to visits) before switching
-# to temperature 0 (always the most-visited move). Sampling early is what makes
-# games diverge; playing greedily later keeps the value targets meaningful.
+# Moves sampled rather than played greedily, at the start of each game. This is
+# what makes the games differ; after that it plays properly so the results mean
+# something.
 TEMPERATURE_MOVES = 10
 
-# Games kept in flight together. Larger batches use the GPU better; too large and
-# early-finishing games leave the batch half empty.
 DEFAULT_PARALLEL_GAMES = 32
 
 
@@ -49,18 +40,14 @@ DEFAULT_PARALLEL_GAMES = 32
 class Sample:
     """One training example."""
 
-    state: np.ndarray      # (2, 6, 7) float32, canonical
-    policy: np.ndarray     # (7,) float32, sums to 1
-    value: float           # in {-1.0, 0.0, +1.0}, from this position's mover's view
+    state: np.ndarray      # (2, 6, 7)
+    policy: np.ndarray     # (7,), sums to 1
+    value: float           # -1, 0 or +1
 
 
 def mirror(sample: Sample) -> Sample:
-    """Left-right mirror of a sample.
-
-    Connect-4 is symmetric under horizontal reflection: the mirrored position is
-    legal, its value is unchanged, and its policy is the original reversed. Free
-    data, and it discourages the network from learning column-specific quirks.
-    """
+    """Flip a sample left-right. Connect 4 is symmetric, so the mirrored board
+    is just as valid - free extra training data."""
     return Sample(
         state=np.ascontiguousarray(sample.state[:, :, ::-1]),
         policy=np.ascontiguousarray(sample.policy[::-1]),
@@ -69,7 +56,7 @@ def mirror(sample: Sample) -> Sample:
 
 
 def augment(samples: list[Sample]) -> list[Sample]:
-    """Return `samples` plus their mirror images."""
+    """Samples plus their mirrors."""
     return samples + [mirror(s) for s in samples]
 
 
@@ -79,11 +66,10 @@ def assign_values(
     movers: list[str],
     winner: str | None,
 ) -> list[Sample]:
-    """Attach the game result to every position, from each mover's perspective.
+    """Label every position with the result, from that player's side.
 
-    The same game gives +1 to the winner's positions and -1 to the loser's. Using
-    a single fixed perspective instead would teach the network that one colour
-    tends to win, which is not a fact about Connect-4 positions.
+    +1 on the winner's positions, -1 on the loser's. Labelling from one fixed
+    colour instead would just teach the network that red usually wins.
     """
     samples = []
     for state, policy, mover in zip(states, policies, movers):
@@ -96,7 +82,7 @@ def assign_values(
 
 
 class _GameInProgress:
-    """Bookkeeping for one self-play game while it runs alongside others."""
+    """One game in progress."""
 
     def __init__(self, first_player: str, rng: np.random.Generator) -> None:
         self.board = Board()
@@ -118,7 +104,7 @@ class _GameInProgress:
         self.search = Search(self.board, self.player, c_puct)
 
     def finish_move(self, noise: bool) -> None:
-        """Record the position, play the chosen move, and advance the turn."""
+        """Save the position, play the move, swap turns."""
         search = self.search
         assert search is not None
 
@@ -147,10 +133,10 @@ def generate_games(
     rng: np.random.Generator | None = None,
     augment_samples: bool = True,
 ) -> list[Sample]:
-    """Play `games` self-play games and return every position as a Sample.
+    """Play `games` games and return every position as a Sample.
 
-    All in-flight games advance in lockstep: each contributes at most one pending
-    leaf per round, and all pending leaves are evaluated in a single batch.
+    The games step forward together, so their leaves can be evaluated in one
+    batch each round.
     """
     rng = rng if rng is not None else np.random.default_rng()
     remaining = games
@@ -181,7 +167,7 @@ def generate_games(
                     owners.append(search)
 
             if not leaves:
-                continue  # every pending simulation resolved on a terminal node
+                continue  # they all hit finished positions
 
             priors, values = predict_batch(
                 net,
@@ -190,8 +176,7 @@ def generate_games(
             )
             for i, search in enumerate(owners):
                 search.resolve(priors[i], float(values[i]))
-                # Noise goes on immediately after the root is expanded, so the
-                # very first simulation already explores under it.
+                # Noise as soon as the root exists, so it affects everything.
                 if add_noise and search.root.children and search.simulations_done == 0:
                     search.add_noise(DIRICHLET_ALPHA, DIRICHLET_WEIGHT, rng)
 

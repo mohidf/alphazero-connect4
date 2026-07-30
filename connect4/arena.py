@@ -1,27 +1,18 @@
-"""Head-to-head evaluation: is the new network actually better?
+"""Playing two agents against each other.
 
-Self-play loss going down is not evidence of improvement — the targets move every
-iteration, so the loss is measured against a shifting reference. The only honest
-check is playing games.
+Training loss going down doesn't mean the network got better, because the targets
+move every iteration. Actually playing games is the only real check. Opponents,
+roughly in order of usefulness: random (a floor), the previous checkpoint, and
+alpha-beta at a fixed depth.
 
-Three opponents, in increasing order of what they tell you:
+Who moves first alternates, since Connect 4 is a first-player win and a fixed seat
+would flatter one side.
 
-* **random** — a floor. Failing this means something is broken, not weak.
-* **the previous checkpoint** — did this iteration help?
-* **alpha-beta** — a fixed, genuinely strong benchmark of known depth. This is the
-  one worth watching, and most people building AlphaZero from scratch have no
-  equivalent.
-
-Every match alternates who moves first, because Connect-4 is a first-player win
-with perfect play and a fixed seat would flatter one side.
-
-**Openings are randomised, and that is not optional.** Greedy PUCT and alpha-beta
-are both deterministic, so without it a 12-game match replays the same two games
-six times each: the reported score is correct but carries two games' worth of
-information, and every promotion decision rests on those two. Each random opening
-is played twice with the seats swapped, so both agents meet the same position from
-both sides — that pairing is what keeps an unbalanced opening from deciding the
-match. Pass opening_plies=0 for a deterministic match when that is what you want.
+Openings are randomised, which matters more than it sounds. Both agents are
+deterministic, so without it a 12-game match is really the same two games played
+six times each - the score looks fine but means almost nothing. Each opening is
+played twice with the sides swapped so a lopsided one cancels out. Use
+opening_plies=0 if you want a deterministic match.
 """
 
 from dataclasses import dataclass
@@ -30,9 +21,10 @@ from typing import Callable
 import numpy as np
 
 from connect4.board import Board, PLAYER_R, PLAYER_Y
-from connect4.mcts import other
+from connect4.encoding import legal_move_mask, mask_and_normalise
+from connect4.mcts import mcts_move, other
 from connect4 import alphabeta as ab
-from connect4.network import Connect4Net
+from connect4.network import Connect4Net, predict
 from connect4.puct import C_PUCT, caching_evaluator, network_evaluator, puct_move
 
 # (board, player) -> column
@@ -51,7 +43,7 @@ class MatchResult:
 
     @property
     def score(self) -> float:
-        """Points per game, draws counting a half — the usual chess convention."""
+        """Points per game, draws worth a half."""
         if self.games == 0:
             return 0.0
         return (self.wins + 0.5 * self.draws) / self.games
@@ -78,18 +70,37 @@ def alphabeta_agent(depth: int) -> Agent:
     return agent
 
 
+def policy_agent(net: Connect4Net) -> Agent:
+    """Just the policy head, no search - whichever legal column it likes most.
+
+    Shows what the network itself has learned, as opposed to what the search
+    manages to find at play time.
+    """
+    def agent(board: Board, player: str) -> int:
+        priors, _ = predict(net, board, player)
+        legal = mask_and_normalise(priors, legal_move_mask(board))
+        return int(legal.argmax())
+
+    return agent
+
+
+def mcts_agent(simulations: int = 1000) -> Agent:
+    """Plain MCTS with random rollouts, no network."""
+    def agent(board: Board, player: str) -> int:
+        return mcts_move(board, player, simulations)
+
+    return agent
+
+
 def network_agent(
     net: Connect4Net, simulations: int = 160, c_puct: float = C_PUCT
 ) -> Agent:
-    """PUCT guided by `net`, played greedily — no noise, no temperature.
+    """PUCT with the network, played greedily. No noise - that is only for
+    generating varied training data and would just weaken it here.
 
-    Noise exists to diversify training data; using it here would just make the
-    agent weaker and the measurement noisier.
-
-    Evaluations are cached. Arena searches run one at a time so they cannot be
-    batched, and consecutive moves in a game re-search overlapping subtrees — the
-    cache is what stops evaluation dominating a long training run. It is built
-    per call, so it never outlives the weights it was filled from.
+    Evaluations are cached, since these searches run one at a time and successive
+    moves cover a lot of the same tree. The cache is per call so it never
+    outlives the weights it came from.
     """
     evaluator = caching_evaluator(network_evaluator(net))
 
@@ -99,17 +110,13 @@ def network_agent(
     return agent
 
 
-# Plies played at random before the agents take over. Four is safe: the earliest
-# possible win is ply seven, so a shorter opening can never be terminal.
+# Random moves played before the agents take over. Under 7 is safe, since the
+# earliest possible win is move 7.
 DEFAULT_OPENING_PLIES = 4
 
 
 def random_opening(rng: np.random.Generator, plies: int = DEFAULT_OPENING_PLIES) -> list[int]:
-    """Return `plies` random legal columns, played alternately from an empty board.
-
-    Kept under seven plies so the opening can never be a finished game — the
-    earliest win in Connect-4 needs four moves by one player, i.e. ply seven.
-    """
+    """A few random opening moves, alternating from an empty board."""
     if plies >= 7:
         raise ValueError("openings must be shorter than 7 plies to stay non-terminal")
 
@@ -125,11 +132,8 @@ def random_opening(rng: np.random.Generator, plies: int = DEFAULT_OPENING_PLIES)
 
 
 def play_game(first: Agent, second: Agent, opening: list[int] | None = None) -> str | None:
-    """Play one game, `first` moving first as R. Returns the winner or None.
-
-    `opening` is a list of columns played before either agent is consulted,
-    alternating from R.
-    """
+    """Play a game. `first` is R. `opening` is played before either agent gets
+    a turn. Returns the winner, or None for a draw."""
     board = Board()
     player = PLAYER_R
 
@@ -152,15 +156,11 @@ def play_match(
     rng: np.random.Generator | None = None,
     opening_plies: int = DEFAULT_OPENING_PLIES,
 ) -> MatchResult:
-    """Play `games` games and return the result from `challenger`'s side.
+    """Play a match, scored from the challenger's side.
 
-    Games come in pairs: one random opening, played once with the challenger
-    moving first and once with the incumbent moving first. So the seats alternate
-    *and* both agents face every opening from both sides, which is what makes a
-    lopsided opening cancel out instead of deciding the match.
-
-    opening_plies=0 gives a deterministic match — useful for tests, useless for
-    measuring two deterministic agents against each other.
+    Games come in pairs sharing one random opening, played from both sides, so an
+    unfair opening cancels out. opening_plies=0 makes it deterministic, which is
+    handy in tests and useless for actual measurement.
     """
     rng = rng if rng is not None else np.random.default_rng()
     wins = losses = draws = 0
@@ -169,7 +169,7 @@ def play_match(
     for i in range(games):
         challenger_is_first = i % 2 == 0
         if challenger_is_first:
-            # New opening for each pair; the second game of the pair reuses it.
+            # new opening per pair, reused by the second game
             opening = random_opening(rng, opening_plies) if opening_plies else []
 
         if challenger_is_first:

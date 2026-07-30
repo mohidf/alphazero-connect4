@@ -1,12 +1,10 @@
-"""Tests for PUCT search.
+"""Tests for PUCT.
 
-Because the evaluator is a plain callable, search behaviour can be pinned exactly
-with stub evaluators — no network, no randomness. That separates "is the search
-correct" from "is the network any good", which are otherwise very hard to tell
-apart.
+The evaluator is just a callable, so these use stubs and no network at all. That
+separates "is the search right" from "is the network any good".
 
-The sign convention under test throughout: a node's Q is from the perspective of
-the player to move *at that node*, so values flip at every level of the backup.
+Sign convention being tested throughout: a node's Q is from the point of view of
+whoever moves there, so it flips at every level going back up.
 """
 
 import numpy as np
@@ -40,7 +38,7 @@ def full_board() -> Board:
 
 
 def constant_evaluator(value: float):
-    """Flat priors, fixed value — isolates the backup sign from policy effects."""
+    """Flat priors, fixed value - isolates the backup sign from policy effects."""
     def evaluate(board: Board, player: str) -> tuple[np.ndarray, float]:
         return np.full(COLS, 1.0 / COLS, dtype=np.float32), value
     return evaluate
@@ -75,16 +73,16 @@ def test_terminal_value_of_a_draw_is_zero():
 
 
 def test_terminal_value_is_minus_one_for_the_player_on_the_move():
-    """A win is created by the move that just happened, so whoever is on the move
-    at a won position is the player who lost."""
+    """A win is created by the move that just happened, so whoever is on the move at a won
+    position is the player who lost."""
     board = r_has_won()
     assert board.winner() == PLAYER_R
     assert terminal_value(board, PLAYER_Y) == -1.0
 
 
 def test_terminal_value_is_plus_one_for_the_winner():
-    """Kept for correctness rather than reachability — no legal search path
-    arrives at a won position with the winner still to move."""
+    """Kept for correctness rather than reachability - no legal search path arrives at a
+    won position with the winner still to move."""
     assert terminal_value(r_has_won(), PLAYER_R) == 1.0
 
 
@@ -93,7 +91,7 @@ def test_terminal_value_is_plus_one_for_the_winner():
 # --------------------------------------------------------------------------
 
 def test_unvisited_node_has_zero_q():
-    """Not infinity, unlike UCB1 — the prior term is what drives exploration."""
+    """Not infinity, unlike UCB1 - the prior term is what drives exploration."""
     assert Node(Board(), PLAYER_R).q == 0.0
 
 
@@ -128,11 +126,7 @@ def test_puct_score_prefers_the_less_visited_child_at_equal_prior():
 
 
 def test_puct_score_flips_the_sign_of_the_childs_q():
-    """A child that is winning *for its own mover* is bad for the parent.
-
-    Two children with identical priors and visits: the one whose Q is high (good
-    for the opponent) must score lower.
-    """
+    """A child that is winning for its own mover is bad for the parent."""
     parent = Node(Board(), PLAYER_R)
     parent.visits = 20
 
@@ -222,11 +216,7 @@ def test_backup_increments_visits_along_the_path():
 
 
 def test_backup_alternates_the_sign_up_the_tree():
-    """The core sign convention. Leaf gets +1, its parent -1, the root +1 again.
-
-    Without the flip the search prefers losing moves while everything else looks
-    correct — the same failure as crediting the wrong player in vanilla MCTS.
-    """
+    """The core sign convention."""
     root = Node(Board(), PLAYER_R)
     child = Node(Board(), PLAYER_Y, parent=root)
     grandchild = Node(Board(), PLAYER_R, parent=child)
@@ -255,7 +245,7 @@ def test_backup_accumulates_across_calls():
 # --------------------------------------------------------------------------
 
 def test_root_sees_every_simulation():
-    """Root expansion is deliberately not backed up, so visits == simulations."""
+    """Root expansion is not backed up, so visits == simulations."""
     for simulations in (1, 10, 64):
         root = run_search(Board(), PLAYER_R, uniform_evaluator, simulations)
         assert root.visits == simulations
@@ -279,8 +269,8 @@ def test_search_only_creates_legal_children():
 
 
 def test_terminal_root_gains_no_children():
-    """A finished game must not be expanded — the same contract vanilla MCTS
-    needed, and for the same reason: playing on makes winner() report None."""
+    """A finished game must not be expanded - the same contract vanilla MCTS needed, and
+    for the same reason: playing on makes winner() report None."""
     root = run_search(r_has_won(), PLAYER_Y, uniform_evaluator, 20)
 
     assert root.children == {}
@@ -297,8 +287,8 @@ def test_search_on_a_full_board_returns_a_childless_root():
 
 
 def test_one_evaluator_call_per_simulation_plus_the_root():
-    """No rollouts: each simulation ends in exactly one evaluation, except those
-    ending at a terminal position, which need none."""
+    """No rollouts: each simulation ends in exactly one evaluation, except those ending at
+    a terminal position, which need none."""
     evaluate, calls = counting_evaluator()
     run_search(Board(), PLAYER_R, evaluate, simulations=25)
 
@@ -318,16 +308,12 @@ def test_evaluator_is_asked_from_the_right_perspective():
 
 
 # --------------------------------------------------------------------------
-# search quality — exact even with a useless evaluator
+# search quality - exact even with a useless evaluator
 # --------------------------------------------------------------------------
 
 def test_finds_an_immediate_win_with_a_uniform_evaluator():
-    """Terminal values inside the tree are exact, so the network's quality is
-    irrelevant here.
-
-    Worth contrasting with vanilla MCTS, which needed ~2000 random rollouts to
-    see the same win. PUCT sees it as soon as it tries the column once.
-    """
+    """Terminal values inside the tree are exact, so the network's quality is irrelevant
+    here."""
     assert puct_move(r_can_win_in_one(), PLAYER_R, uniform_evaluator, simulations=50) == 3
 
 
@@ -349,15 +335,8 @@ def test_priors_steer_the_search():
 
 
 def test_value_sign_propagates_to_the_root():
-    """An evaluator that always says "the mover is winning" must make the root
-    look *losing*, because the root's children are the opponent's positions.
-
-    Deliberately one simulation: the single leaf is then a depth-1 child, and the
-    root's value is exactly its negation. With many simulations against a constant
-    evaluator the root's Q reflects nothing but the parity of leaf depths —
-    contributions alternate sign, so the total says more about the shape of the
-    tree than about the sign convention.
-    """
+    """An evaluator that always says "the mover is winning" must make the root look
+    losing*, because the root's children are the opponent's positions."""
     root = run_search(Board(), PLAYER_R, constant_evaluator(1.0), simulations=1)
     assert root.q == pytest.approx(-1.0)
 
@@ -366,11 +345,7 @@ def test_value_sign_propagates_to_the_root():
 
 
 def test_a_losing_evaluation_does_not_stop_the_search_finding_a_win():
-    """Terminal values override the evaluator entirely.
-
-    Even with an evaluator insisting every position is lost, the exact -1 backed
-    up from the opponent's side of a won position must still surface column 3.
-    """
+    """Terminal values override the evaluator entirely."""
     assert puct_move(r_can_win_in_one(), PLAYER_R, constant_evaluator(-1.0), 60) == 3
 
 
@@ -472,10 +447,8 @@ def test_dirichlet_noise_only_touches_legal_columns():
 
 
 def test_noise_makes_self_play_vary():
-    """Without noise the search is deterministic given a deterministic evaluator,
-    so every self-play game would be identical and the training set would stop
-    growing. With noise, root visit distributions differ between runs.
-    """
+    """Without noise the search is deterministic given a deterministic evaluator, so every
+    self-play game would be identical and the training set would stop growing."""
     plain = [
         visit_counts(run_search(Board(), PLAYER_R, uniform_evaluator, 48))
         for _ in range(2)
@@ -499,8 +472,8 @@ def test_noise_makes_self_play_vary():
 # --------------------------------------------------------------------------
 
 def test_search_runs_with_an_untrained_network():
-    """An untrained network must not be able to break the search — its priors are
-    near-uniform and its values near-arbitrary, and that has to be survivable."""
+    """An untrained network must not be able to break the search - its priors are near-
+    uniform and its values near-arbitrary, and that has to be survivable."""
     import torch
 
     from connect4.network import Connect4Net
@@ -516,11 +489,7 @@ def test_search_runs_with_an_untrained_network():
 
 
 def test_untrained_network_still_finds_a_forced_win():
-    """Terminal values are exact, so tactics do not depend on training at all.
-
-    This is the property that makes early self-play produce useful data: the
-    search is already better than the network guiding it.
-    """
+    """Terminal values are exact, so tactics do not depend on training at all."""
     import torch
 
     from connect4.network import Connect4Net
@@ -532,7 +501,7 @@ def test_untrained_network_still_finds_a_forced_win():
 
 
 # --------------------------------------------------------------------------
-# Search — the resumable form used for batched self-play
+# Search - the resumable form used for batched self-play
 # --------------------------------------------------------------------------
 
 def drive(search, evaluator, simulations):
@@ -547,12 +516,7 @@ def drive(search, evaluator, simulations):
 
 @pytest.mark.parametrize("simulations", [1, 2, 5, 32, 64])
 def test_search_matches_run_search_exactly(simulations):
-    """The resumable form must be the same algorithm, not merely a similar one.
-
-    Given the same deterministic evaluator, visit counts and values have to match
-    run_search node for node — otherwise batched self-play would be training on
-    targets the reference search never produces.
-    """
+    """The resumable form must be the same algorithm, not merely a similar one."""
     reference = run_search(Board(), PLAYER_R, uniform_evaluator, simulations)
     stepwise = drive(puct.Search(Board(), PLAYER_R), uniform_evaluator, simulations)
 
@@ -568,8 +532,7 @@ def test_search_hands_out_the_root_first():
 
 
 def test_search_root_expansion_is_not_a_simulation():
-    """Root expansion is setup. Counting it would make visits off by one and
-    shift every policy target."""
+    """Root expansion is setup."""
     search = puct.Search(Board(), PLAYER_R)
     leaf = search.pending_leaf()
     search.resolve(*uniform_evaluator(leaf.board, leaf.player_to_move))
@@ -580,8 +543,8 @@ def test_search_root_expansion_is_not_a_simulation():
 
 
 def test_search_rejects_a_second_leaf_before_resolve():
-    """At most one leaf outstanding — that invariant is why no virtual loss is
-    needed when batching across games."""
+    """At most one leaf outstanding - that invariant is why no virtual loss is needed when
+    batching across games."""
     search = puct.Search(Board(), PLAYER_R)
     search.pending_leaf()
     with pytest.raises(RuntimeError):
@@ -605,8 +568,8 @@ def test_search_returns_no_leaf_for_a_terminal_root():
 
 
 def test_search_returns_no_leaf_when_a_simulation_ends_terminal():
-    """Simulations that reach a decided position resolve without an evaluator
-    call — that's why the batch is sometimes smaller than the game count."""
+    """Simulations that reach a decided position resolve without an evaluator call - that's
+    why the batch is sometimes smaller than the game count."""
     search = puct.Search(r_can_win_in_one(), PLAYER_R)
     drive(search, uniform_evaluator, 60)
 

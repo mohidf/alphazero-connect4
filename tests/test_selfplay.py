@@ -1,14 +1,7 @@
 """Tests for self-play data generation.
 
-The parts worth pinning are the **targets**, because a wrong target trains a wrong
-network silently — the loss still falls, the games still play, and nothing raises.
-Two in particular:
-
-* the value target's sign per position (winner's positions +1, loser's -1)
-* the mirror augmentation (position reflected, policy reversed, value unchanged)
-
-Everything here runs on CPU with tiny simulation counts. Generation speed is a
-property of the batching, not of correctness.
+Mostly about the training targets, since a wrong target trains a wrong network
+without anything failing: the value sign per position, and the mirroring.
 """
 
 import numpy as np
@@ -84,8 +77,8 @@ def test_mirror_is_an_involution():
 
 
 def test_mirror_output_is_contiguous():
-    """Negative-stride views break torch.from_numpy, and the failure surfaces
-    inside the training loop rather than here."""
+    """Negative-stride views break torch.from_numpy, and the failure surfaces inside the
+    training loop rather than here."""
     reflected = mirror(a_sample())
     assert reflected.state.flags["C_CONTIGUOUS"]
     assert reflected.policy.flags["C_CONTIGUOUS"]
@@ -112,11 +105,7 @@ def test_augment_doubles_the_sample_count():
 # --------------------------------------------------------------------------
 
 def test_winner_positions_get_plus_one_and_loser_positions_minus_one():
-    """Per-position perspective, not a fixed colour.
-
-    Labelling from one fixed side would teach the network that a colour tends to
-    win, which is not a fact about positions.
-    """
+    """Per-position perspective, not a fixed colour."""
     states = [np.zeros((2, ROWS, COLS), dtype=np.float32)] * 4
     policies = [np.full(COLS, 1.0 / COLS, dtype=np.float32)] * 4
     movers = [PLAYER_R, PLAYER_Y, PLAYER_R, PLAYER_Y]
@@ -184,7 +173,7 @@ def test_games_produce_a_plausible_number_of_positions(net):
 
 
 def test_generation_is_reproducible_given_a_seed(net):
-    """Same seed, same data. Without this, a bad iteration can't be re-run."""
+    """Same seed, same data."""
     kwargs = dict(games=2, simulations=8, parallel=2, augment_samples=False)
     first = generate_games(net, **kwargs, rng=np.random.default_rng(7))
     second = generate_games(net, **kwargs, rng=np.random.default_rng(7))
@@ -209,8 +198,7 @@ def test_noise_changes_the_games_generated(net):
 
 
 def test_parallelism_does_not_change_correctness(net):
-    """Batch size is a performance knob. Whatever it is set to, every sample must
-    still be a valid target — that's what makes it safe to tune."""
+    """Batch size is a performance knob."""
     for parallel in (1, 2, 4):
         samples = generate_games(
             net, games=4, simulations=8, parallel=parallel,

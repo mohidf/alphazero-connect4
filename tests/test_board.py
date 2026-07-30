@@ -1,8 +1,8 @@
-"""Tests for the Connect-4 board engine.
+"""Tests for the board itself.
 
-Positions are built by *playing moves*, never by handing a literal grid to
-``Board(...)``. That keeps every test position reachable in a real game, which
-is what makes the last-move win check sound (see `winner()` in board.py).
+Positions are built with play()/play_alternating() rather than by writing to the
+grid - a hand-made grid can hold impossible states and has no move history, which
+winner() needs.
 """
 
 import pytest
@@ -20,7 +20,7 @@ R = PLAYER_R
 Y = PLAYER_Y
 
 # A 42-move column order that fills the board with strict R/Y alternation and
-# never completes a four-in-a-row — not at the end, and not at any point along
+# never completes a four-in-a-row - not at the end, and not at any point along
 # the way, so the last-move win check stays valid throughout.
 # Found by backtracking search; obvious fill orders (left-to-right, column by
 # column) all produce accidental wins long before the board fills.
@@ -36,11 +36,7 @@ DRAW_SEQUENCE = [
 # --------------------------------------------------------------------------
 
 def play(moves: list[tuple[int, str]]) -> Board:
-    """Build a board from explicit (column, player) pairs.
-
-    Use this when the position needs a specific piece layout that strict
-    alternation can't produce — diagonals, mostly.
-    """
+    """Build a board from explicit (column, player) pairs."""
     board = Board()
     for col, player in moves:
         board.make_move(col, player)
@@ -48,10 +44,7 @@ def play(moves: list[tuple[int, str]]) -> Board:
 
 
 def play_alternating(cols: list[int], first: str = PLAYER_R) -> Board:
-    """Build a board by alternating players over a list of columns.
-
-    ``play_alternating([3, 3, 4])`` is R->3, Y->3, R->4.
-    """
+    """Build a board by alternating players over a list of columns."""
     other = PLAYER_Y if first == PLAYER_R else PLAYER_R
     return play([
         (col, first if i % 2 == 0 else other)
@@ -118,7 +111,7 @@ def test_available_moves_on_empty_board():
 
 
 def test_available_moves_still_seven_after_one_move():
-    """A column with room left stays playable — unlike Tic-Tac-Toe cells."""
+    """A column with room left stays playable - unlike Tic-Tac-Toe cells."""
     board = Board()
     board.make_move(0, PLAYER_R)
     # Column 0 still has ROWS - 1 empty cells above the piece, so it stays legal.
@@ -196,7 +189,7 @@ def test_undo_empty_column_raises():
 
 
 # --------------------------------------------------------------------------
-# win detection — one test per direction
+# win detection - one test per direction
 # --------------------------------------------------------------------------
 
 def test_vertical_win():
@@ -207,25 +200,21 @@ def test_vertical_win():
 
 
 def test_horizontal_win_at_left_edge():
-    """Cols 0-3. Walking left from col 0 must not wrap to the far side."""
+    """Cols 0-3."""
     moves = [(0, R), (0, Y), (1, R), (1, Y), (2, R), (2, Y), (3, R)]
     board = play(moves)
     assert board.winner() == R
 
 
 def test_horizontal_win_at_right_edge():
-    """Cols 3-6. Walking right from col 6 must stop at the boundary."""
+    """Cols 3-6."""
     moves = [(3, R), (3, Y), (4, R), (4, Y), (5, R), (5, Y), (6, R)]
     board = play(moves)
     assert board.winner() == R
 
 
 def test_diagonal_win_ascending():
-    """The '/' diagonal: R at (5,0) (4,1) (3,2) (2,3).
-
-    Each successive column needs one more Y underneath to lift R a row higher.
-    Distinct columns alone would put every piece on row 5.
-    """
+    """The '/' diagonal: R at (5,0) (4,1) (3,2) (2,3)."""
     moves = [
         (0, R),                          # (5,0)
         (1, Y), (1, R),                  # (4,1)
@@ -237,10 +226,7 @@ def test_diagonal_win_ascending():
 
 
 def test_diagonal_win_descending():
-    """The '\\' diagonal: R at (2,0) (3,1) (4,2) (5,3).
-
-    Same idea mirrored — the filler stack shrinks as the columns go right.
-    """
+    """The '\\' diagonal: R at (2,0) (3,1) (4,2) (5,3)."""
     moves = [
         (0, Y), (0, Y), (0, Y), (0, R),  # (2,0)
         (1, Y), (1, Y), (1, R),          # (3,1)
@@ -252,7 +238,7 @@ def test_diagonal_win_descending():
 
 
 # --------------------------------------------------------------------------
-# win detection — things that must NOT count as wins
+# win detection - things that must NOT count as wins
 # --------------------------------------------------------------------------
 
 def test_three_in_a_row_is_not_a_win():
@@ -272,14 +258,11 @@ def test_mixed_colours_do_not_combine():
 
 
 def test_no_wrap_around_between_rows():
-    """R on row 5 cols 5-6 plus R on row 4 cols 0-1 is four pieces, not a line.
-
-    A flat-index board would read these as contiguous. The 2D board must not.
-    """
+    """R on row 5 cols 5-6 plus R on row 4 cols 0-1 is four pieces, not a line."""
     moves = [
-        (5, R), (6, R),                  # (5,5) (5,6) — right end of the bottom row
+        (5, R), (6, R),                  # (5,5) (5,6) - right end of the bottom row
         (0, Y), (1, Y),                  # filler, to lift the next two to row 4
-        (0, R), (1, R),                  # (4,0) (4,1) — left end of the row above
+        (0, R), (1, R),                  # (4,0) (4,1) - left end of the row above
     ]
     board = play(moves)
     assert board.grid[ROWS - 1][COLS - 1] == R
@@ -310,7 +293,7 @@ def test_is_full_only_at_42_pieces():
     assert board.move_count == ROWS * COLS - 1
     assert not board.is_full()
 
-    # Move 42 is index 41, which is Y's turn — keep the alternation intact so
+    # Move 42 is index 41, which is Y's turn - keep the alternation intact so
     # the position stays one a real game could reach.
     board.make_move(DRAW_SEQUENCE[-1], PLAYER_Y)
     assert board.is_full()

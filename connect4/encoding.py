@@ -1,48 +1,34 @@
-"""Board -> network input encoding, in canonical (current-player) form.
+"""Turning a board into the array the network reads.
 
-The network sees every position from the perspective of the player about to move:
+Always from the point of view of whoever is about to move:
 
-    plane 0  the mover's own pieces
-    plane 1  the opponent's pieces
+    plane 0  my pieces
+    plane 1  their pieces
 
-so a position is encoded identically whether it is R or Y to move. That is what
-lets one network play both sides, and it means a training example is equally
-useful no matter which colour produced it.
+So the same situation encodes the same way whether R or Y is on the move, which
+means one network can play both colours and every training example counts twice
+as much. Using a fixed "R plane / Y plane" instead makes the network learn the
+same thing twice.
 
-Encoding by fixed colour instead (an "R plane" and a "Y plane") forces the
-network to learn two mirror-image copies of the same function, and halves the
-value of every example. Getting this wrong does not raise — it just trains
-slowly and plateaus low.
-
-Everything here is numpy only; no torch. Conversion to a tensor happens at the
-network boundary, so this module and its tests stay fast and dependency-free.
+numpy only here; the conversion to a tensor happens in network.py.
 """
 
 import numpy as np
 
 from connect4.board import Board, EMPTY, ROWS, COLS
 
-# (planes, rows, cols) — channel-first, matching torch's Conv2d convention.
 PLANES = 2
 INPUT_SHAPE = (PLANES, ROWS, COLS)
-
-# Policy target/output is one entry per column.
 ACTION_SIZE = COLS
 
 
 def encode(board: Board, player: str) -> np.ndarray:
-    """Return `board` as a float32 array of shape INPUT_SHAPE, from `player`'s view.
+    """Board as a (2, 6, 7) float32 array, seen from `player`.
 
-    plane 0 is 1.0 where `player` has a piece, plane 1 is 1.0 where the opponent
-    does, and 0.0 elsewhere. `player` is whoever is about to move.
-
-    Note this takes the player explicitly rather than deriving it from
-    board.last_player: a board built by Board(grid) has no history, and the
-    caller always knows whose turn it is anyway.
+    Takes the player explicitly because a board built from a grid has no history
+    to read it from, and the caller knows whose turn it is anyway.
     """
-    # Initialize the encoding array
     encoded = np.zeros(INPUT_SHAPE, dtype=np.float32)
-    # Fill in the planes based on the board's grid
     for row in range(ROWS):
         for col in range(COLS):
             cell = board.grid[row][col]
@@ -54,11 +40,10 @@ def encode(board: Board, player: str) -> np.ndarray:
 
 
 def legal_move_mask(board: Board) -> np.ndarray:
-    """Return a float32 mask of shape (ACTION_SIZE,): 1.0 for playable columns.
+    """1.0 for playable columns, 0.0 otherwise.
 
-    Needed because the policy head emits seven logits regardless of whether the
-    columns are playable. Illegal moves must be zeroed *before* renormalising,
-    or probability leaks onto moves that cannot be made.
+    The policy head always outputs seven numbers whether or not the columns are
+    playable, so they have to be zeroed before anything is normalised.
     """
     mask = np.zeros(ACTION_SIZE, dtype=np.float32)
     for col in board.available_moves():
@@ -67,16 +52,13 @@ def legal_move_mask(board: Board) -> np.ndarray:
 
 
 def mask_and_normalise(priors: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Zero out illegal moves in `priors` and renormalise to sum to 1.
+    """Drop illegal moves and rescale so the rest sum to 1.
 
-    `priors` must be non-negative — i.e. probabilities, not raw logits. That is
-    checked rather than assumed: feeding logits in produces negative "priors"
-    that break PUCT's exploration term while the network trains normally, which
-    is a miserable thing to track down.
+    Priors have to be probabilities, not logits - logits are often negative and
+    would quietly wreck PUCT's exploration term, so that's checked here.
 
-    If every legal prior is 0 the result is uniform over the legal moves. An
-    untrained or saturated network must not be able to crash the search — during
-    early self-play the network is garbage by definition.
+    If every legal prior is zero we fall back to uniform. An untrained network
+    outputs nonsense and shouldn't be able to crash the search.
     """
     if not mask.any():
         raise ValueError("cannot normalise priors: no legal moves in the mask")
@@ -91,30 +73,23 @@ def mask_and_normalise(priors: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
     total = masked.sum()
     if total <= 0:
-        # Assign uniform, don't add it — adding only happens to be correct when
-        # `masked` is all zeros, and silently wrong otherwise.
         return (mask / mask.sum()).astype(np.float32)
 
     return masked / total
 
 
 def decode_to_string(encoded: np.ndarray) -> str:
-    """Render an encoded position back to text, for debugging.
-
-    Use 'X' for the mover's pieces and 'O' for the opponent's — deliberately not
-    R/Y, since the encoding has discarded which colour is which. If you find
-    yourself wanting R/Y here, that's a sign the canonical form has leaked.
-    """
-    # Initialize the decoded string
-    decoded = ""
+    """Print an encoded position. X is the mover, O is the opponent - not R/Y,
+    because the encoding has thrown away which colour is which."""
+    rows = []
     for row in range(ROWS):
+        line = ""
         for col in range(COLS):
             if encoded[0, row, col] == 1.0:
-                decoded += "X"
+                line += "X"
             elif encoded[1, row, col] == 1.0:
-                decoded += "O"
+                line += "O"
             else:
-                decoded += "."
-        decoded += "\n"
-    return decoded
-
+                line += "."
+        rows.append(line)
+    return "\n".join(rows) + "\n"

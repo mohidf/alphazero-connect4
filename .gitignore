@@ -19,3 +19,6 @@ Thumbs.db
 # Training artifacts
 checkpoints/
 *.pt
+
+# Solver benchmark (large binaries and generated data)
+external/

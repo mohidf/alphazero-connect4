@@ -1,9 +1,8 @@
-"""Tests for the heuristic evaluation function.
+"""Tests for the scoring function.
 
-evaluate() is a judgement call, not a specification — there's no single correct
-number for a position. So these tests pin down *structural properties* rather
-than literal scores: symmetry, sign, ordering, and the magnitude bound that
-keeps WIN_SCORE dominant. Those hold no matter how the weights get tuned.
+There's no single right number for a position, so these check properties that
+hold whatever the weights are: symmetry, sign, ordering, and the bound that keeps
+WIN_SCORE on top.
 """
 
 import pytest
@@ -22,12 +21,7 @@ from tests.test_board import play, DRAW_SEQUENCE, R, Y
 
 
 def mirror_colours(board: Board) -> Board:
-    """Return a copy of `board` with every R swapped for Y and vice versa.
-
-    Built by hand rather than by replaying moves, because the swapped position
-    has the opposite player to move and isn't reachable by the same sequence.
-    Safe here only because evaluate() never reads last_move — unlike winner().
-    """
+    """Return a copy of `board` with every R swapped for Y and vice versa."""
     swap = {PLAYER_R: PLAYER_Y, PLAYER_Y: PLAYER_R, EMPTY: EMPTY}
     return Board([[swap[cell] for cell in row] for row in board.grid])
 
@@ -51,10 +45,7 @@ def test_there_are_69_windows():
 
 
 def test_every_window_has_four_distinct_cells_on_the_board():
-    """No duplicates within a window, and every (row, col) in range.
-
-    Catches the off-by-one that lets a run of four hang off an edge.
-    """
+    """No duplicates within a window, and every (row, col) in range."""
     for window in WINDOWS:
         assert len(window) == CONNECT
         assert len(set(window)) == CONNECT
@@ -69,12 +60,8 @@ def test_windows_are_unique():
 
 
 def test_all_four_orientations_are_present():
-    """Derive each window's direction from its first two cells; all four of
-    horizontal, vertical, and both diagonals must appear.
-
-    len(WINDOWS) == 69 alone wouldn't catch a duplicated orientation paired
-    with a missing one.
-    """
+    """Derive each window's direction from its first two cells; all four of horizontal,
+    vertical, and both diagonals must appear."""
     directions = set()
     for (r0, c0), (r1, c1), *_ in WINDOWS:
         directions.add((r1 - r0, c1 - c0))
@@ -105,21 +92,14 @@ def test_window_with_only_y_scores_negative():
 
 
 def test_mixed_window_is_dead():
-    """A window holding both colours scores 0 — nobody can ever complete it.
-
-    3-R-1-Y is the tempting one to score highly, and must not be.
-    """
+    """A window holding both colours scores 0 - nobody can ever complete it."""
     assert score_window([PLAYER_R, PLAYER_R, PLAYER_R, PLAYER_Y]) == 0
     assert score_window([PLAYER_R, PLAYER_Y, PLAYER_R, EMPTY]) == 0
     assert score_window([PLAYER_Y, PLAYER_R, EMPTY, PLAYER_Y]) == 0
 
 
 def test_completed_line_raises():
-    """score_window rejects four of a colour rather than scoring it.
-
-    That's a terminal line, which score() in minimax.py owns. Returning a
-    large-but-finite number here would undercut WIN_SCORE's dominance.
-    """
+    """score_window rejects four of a colour rather than scoring it."""
     with pytest.raises(ValueError):
         score_window([PLAYER_R] * CONNECT)
     with pytest.raises(ValueError):
@@ -127,7 +107,7 @@ def test_completed_line_raises():
 
 
 # --------------------------------------------------------------------------
-# evaluate — structural properties
+# evaluate - structural properties
 # --------------------------------------------------------------------------
 
 def test_empty_board_scores_zero():
@@ -136,11 +116,7 @@ def test_empty_board_scores_zero():
 
 
 def test_colour_swap_negates_the_score():
-    """evaluate(mirror_colours(b)) == -evaluate(b), for several positions.
-
-    The single most valuable eval test: catches sign errors, asymmetric window
-    scoring, and a column bonus applied to the wrong player.
-    """
+    """evaluate(mirror_colours(b)) == -evaluate(b), for several positions."""
     for board in [
         Board(),
         play([(0, R), (1, Y), (2, R)]),
@@ -151,21 +127,12 @@ def test_colour_swap_negates_the_score():
 
 
 def test_centre_column_beats_edge_column():
-    """One R in column 3 scores higher than one R in column 0.
-
-    Holds via COLUMN_BONUS and also via window count, so the margin is wide.
-    """
+    """One R in column 3 scores higher than one R in column 0."""
     assert evaluate(play([(3, R)])) > evaluate(play([(0, R)]))
 
 
 def test_column_bonus_is_actually_applied():
-    """COLUMN_BONUS must contribute, not sit unused.
-
-    Comparing two columns can't prove this: window count and column bonus both
-    rise toward the centre, so any pair separated by one is separated by the
-    other. Instead, compute the window-only total here and require evaluate()
-    to exceed it by exactly the bonus — which pins the magnitude and the sign.
-    """
+    """COLUMN_BONUS must contribute, not sit unused."""
     board = play([(3, R)])
     window_only = sum(
         score_window([board.grid[row][col] for row, col in window])
@@ -175,21 +142,15 @@ def test_column_bonus_is_actually_applied():
 
 
 def test_r_advantage_scores_positive():
-    """R has a live three and Y has nothing in reach.
-
-    Note this deliberately does NOT reuse r_can_win_in_one() from
-    test_minimax: that position stacks Y directly on top of R, giving Y a live
-    three of its own, and it evaluates slightly negative. It's built to be
-    tactically winnable in one move, not positionally good.
-    """
+    """R has a live three and Y has nothing in reach."""
     board = play([(0, R), (6, Y), (1, R), (6, Y), (2, R)])
     assert board.winner() is None
     assert evaluate(board) > 0
 
 
 def test_blocked_three_scores_below_live_three():
-    """R with three in a window Y has plugged must score below R with three in
-    an open window. This is the whole point of killing mixed windows."""
+    """R with three in a window Y has plugged must score below R with three in an open
+    window."""
     live = play([(0, R), (1, R), (2, R)])
     blocked = play([(0, R), (1, R), (2, R), (3, Y)])
     assert evaluate(live) > evaluate(blocked)
@@ -200,12 +161,7 @@ def test_blocked_three_scores_below_live_three():
 # --------------------------------------------------------------------------
 
 def test_eval_is_bounded_by_max_eval():
-    """|evaluate(board)| <= MAX_EVAL across many positions.
-
-    Sweeps the 42 boards reachable by playing DRAW_SEQUENCE one move at a time —
-    real positions of increasing density. The final board is terminal, and
-    evaluate() is only defined on non-terminal positions, so it's skipped.
-    """
+    """|evaluate(board)| <= MAX_EVAL across many positions."""
     board = Board()
     for i, col in enumerate(DRAW_SEQUENCE):
         board.make_move(col, R if i % 2 == 0 else Y)
@@ -214,19 +170,11 @@ def test_eval_is_bounded_by_max_eval():
 
 
 def test_max_eval_is_far_below_win_score():
-    """The gap that stops the search preferring a pretty position to a win.
-
-    A pure constants check — no board involved. It fails the moment someone
-    tunes WINDOW_SCORE upward without revisiting MAX_EVAL.
-    """
+    """The gap that stops the search preferring a pretty position to a win."""
     assert MAX_EVAL * 100 <= WIN_SCORE
 
 
 def test_theoretical_max_eval_fits_the_bound():
-    """The worst case the weights permit must also fit under MAX_EVAL.
-
-    Stronger than the sweep above, which only samples one game's worth of
-    positions: every window at maximum plus every cell's column bonus.
-    """
+    """The worst case the weights permit must also fit under MAX_EVAL."""
     worst = len(WINDOWS) * WINDOW_SCORE[CONNECT - 1] + ROWS * sum(COLUMN_BONUS)
     assert worst <= MAX_EVAL

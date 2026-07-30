@@ -1,15 +1,13 @@
-"""Play Connect-4 against the agents in this repo, from the terminal.
+"""Play against any of the agents from the terminal.
 
-    python -m connect4.play                       # vs the best checkpoint, if any
-    python -m connect4.play --opponent alphabeta   --depth 6
-    python -m connect4.play --opponent net --checkpoint checkpoints/demo/best.pt
+    python -m connect4.play                      # the best checkpoint
+    python -m connect4.play --opponent alphabeta --depth 6
     python -m connect4.play --opponent random
-    python -m connect4.play --second               # let the agent move first
+    python -m connect4.play --second             # let it move first
 
-The network opponent prints what its search thought: the visit share per column and
-its value estimate. That is the fastest way to build intuition for what the agent
-actually understands — a policy that spreads evenly across every column means it has
-no idea, and a value swinging wildly move to move means it cannot read the position.
+Against the network it prints what the search was thinking - how the visits were
+spread across the columns and what it thinks of its position. Evenly spread visits
+means it has no real opinion.
 """
 
 import argparse
@@ -17,9 +15,7 @@ import sys
 from pathlib import Path
 
 if __package__ in (None, ""):
-    # Run as a plain file (`python connect4/play.py`, or an editor's Run button),
-    # sys.path[0] is connect4/ and the `connect4` package itself is not importable.
-    # This is the one entry point a human clicks, so make both invocations work.
+    # So this works when run as a plain file, not just with -m.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
@@ -41,7 +37,7 @@ DEFAULT_CHECKPOINT = Path("checkpoints/best.pt")
 
 
 def render(board: Board, highlight: int | None = None) -> str:
-    """The board, with a caret under the column just played."""
+    """Board, with a marker under the last move."""
     lines = [str(board)]
     if highlight is not None:
         lines.append(" " + "  " * highlight + "^")
@@ -49,7 +45,7 @@ def render(board: Board, highlight: int | None = None) -> str:
 
 
 def ask_for_column(board: Board) -> int | None:
-    """Read a legal column from stdin. Returns None if the player wants to quit."""
+    """Ask for a column. None means quit."""
     legal = board.available_moves()
     while True:
         raw = input(f"Your move {legal} (or 'q' to quit): ").strip().lower()
@@ -68,15 +64,14 @@ def ask_for_column(board: Board) -> int | None:
 
 
 def describe_search(root, value: float) -> str:
-    """One line of search output: visit share per column, and the value estimate."""
+    """One line showing where the search spent its time."""
     counts = visit_counts(root)
     total = counts.sum()
     shares = " ".join(
         f"{col}:{counts[col] / total:4.0%}" if counts[col] else f"{col}:   -"
         for col in range(COLS)
     )
-    # Value is from the mover's perspective, so positive means the agent likes its
-    # own position.
+    # positive means it likes its position
     return f"  search: {shares}   value {value:+.2f}"
 
 
@@ -97,7 +92,7 @@ def play(
     verbose: bool = True,
     seed: int | None = None,
 ) -> str | None:
-    """Play one game against `opponent`. Returns the winner, or None for a draw."""
+    """Play a game. Returns the winner, or None for a draw."""
     net = None
     if opponent == "net":
         if not Path(checkpoint).exists():
@@ -137,8 +132,7 @@ def play(
         elif opponent == "alphabeta":
             col, score = ab.best_move(board, depth, player == PLAYER_R)
             if verbose:
-                # Sign the score from the agent's own perspective so +ve always
-                # means "the agent is happy", regardless of colour.
+                # flip so positive always means the agent is happy
                 own = score if player == PLAYER_R else -score
                 print(f"  agent plays {col}   score {own:+d}")
             else:

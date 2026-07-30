@@ -1,22 +1,8 @@
-"""Tests for vanilla MCTS.
+"""Tests for MCTS.
 
-MCTS is stochastic, so tests come in two flavours:
-
-  * **Deterministic** — structure and bookkeeping (UCB1, expansion, backprop
-    perspective, board hygiene). These must always pass.
-  * **Statistical** — playing strength. Seeded via random.seed() so a failure is
-    reproducible, and written with margins wide enough that a correct
-    implementation is not flaky. A tight margin here would cost more hours in
-    false alarms than it ever caught bugs.
-
-Strength expectations, so a correct implementation isn't mistaken for a broken
-one: MCTS should crush a random player, find forced wins given enough
-simulations, and stay roughly level with shallow alpha-beta while losing ground
-as alpha-beta's depth rises.
-
-Positions are built by playing moves, never by writing to `grid` directly —
-a hand-written grid can hold physically impossible states (pieces floating with
-empty cells beneath) and, worse, leaves last_move unset so winner() returns None.
+Two kinds here. The structural ones (UCB1, expansion, backprop) must always pass.
+The playing-strength ones are seeded and use wide margins, since a tight bound on
+a random algorithm just produces false alarms.
 """
 
 import random
@@ -65,11 +51,7 @@ def alphabeta_agent(depth: int):
 
 
 def score_match(agent, opponent, games: int) -> dict[str, int]:
-    """Play `games` games, alternating who moves first. Counts are for `agent`.
-
-    `agent` always plays R; only the first move alternates, so neither side keeps
-    the first-move advantage across the match.
-    """
+    """Play `games` games, alternating who moves first."""
     tally = {"win": 0, "loss": 0, "draw": 0}
     for i in range(games):
         first = PLAYER_R if i % 2 == 0 else PLAYER_Y
@@ -84,15 +66,11 @@ def score_match(agent, opponent, games: int) -> dict[str, int]:
 
 
 # --------------------------------------------------------------------------
-# Board.copy() — the prerequisite
+# Board.copy() - the prerequisite
 # --------------------------------------------------------------------------
 
 def test_copy_is_independent_of_the_original():
-    """Writing to the copy must not touch the original.
-
-    Board(list(grid)) shares the row lists and fails this. Every node in the
-    tree would mutate every other node's position.
-    """
+    """Writing to the copy must not touch the original."""
     original = play([(3, R), (3, Y)])
     clone = original.copy()
 
@@ -104,12 +82,7 @@ def test_copy_is_independent_of_the_original():
 
 
 def test_copy_preserves_a_win():
-    """A copy of a won board still reports its winner.
-
-    The constructor sets last_move = None, and winner() only searches lines
-    through last_move — so a copy that drops it reports no winner, is_terminal()
-    goes False, and every rollout runs 42 moves and scores as a draw.
-    """
+    """A copy of a won board still reports its winner."""
     clone = r_has_won().copy()
     assert clone.winner() == PLAYER_R
     assert clone.is_terminal()
@@ -143,8 +116,8 @@ def test_other_swaps_players():
 
 
 def test_new_node_has_all_moves_untried():
-    """untried_moves matches available_moves(), and is the node's own list —
-    consuming it must not disturb the board."""
+    """untried_moves matches available_moves(), and is the node's own list - consuming it
+    must not disturb the board."""
     board = Board()
     node = Node(board, PLAYER_R)
 
@@ -163,8 +136,8 @@ def test_node_is_not_fully_expanded_until_all_moves_tried():
 
 
 def test_unvisited_child_scores_infinite_ucb1():
-    """Otherwise selection revisits a known child instead of trying a new one,
-    and whole branches never get explored."""
+    """Otherwise selection revisits a known child instead of trying a new one, and whole
+    branches never get explored."""
     parent = Node(Board(), PLAYER_R)
     parent.visits = 10
     child = Node(Board(), PLAYER_Y, parent=parent)
@@ -174,11 +147,7 @@ def test_unvisited_child_scores_infinite_ucb1():
 
 
 def test_ucb1_prefers_the_higher_win_rate_at_equal_visits():
-    """Exploitation term behaves. Equal visits, different wins.
-
-    parent.visits must be set: the exploration term takes log(parent.visits),
-    and log(0) raises ValueError.
-    """
+    """Exploitation term behaves."""
     parent = Node(Board(), PLAYER_R)
     parent.visits = 20
 
@@ -192,12 +161,7 @@ def test_ucb1_prefers_the_higher_win_rate_at_equal_visits():
 
 
 def test_ucb1_prefers_the_less_visited_child_at_equal_win_rate():
-    """Exploration term behaves. Identical win rate, different visit counts.
-
-    Both children sit at 70%, so the exploitation term cancels exactly and only
-    the exploration term can separate them. A sign error there is invisible in
-    the test above but fails here.
-    """
+    """Exploration term behaves."""
     parent = Node(Board(), PLAYER_R)
     parent.visits = 30
 
@@ -274,12 +238,7 @@ def test_select_stops_at_a_node_with_untried_moves():
 
 
 def test_select_stops_at_a_terminal_node():
-    """Descent must not run past the end of a game.
-
-    A won board still has legal moves, so this node is NOT fully expanded —
-    which is exactly why select() has to test the position, not the expansion
-    state.
-    """
+    """Descent must not run past the end of a game."""
     node = Node(r_has_won(), PLAYER_Y)
     assert node.board.is_terminal()
     assert not node.is_fully_expanded()
@@ -298,7 +257,7 @@ def test_select_descends_through_a_fully_expanded_node():
 
 
 def test_rollout_returns_a_winner_or_none():
-    """Result is PLAYER_R, PLAYER_Y, or None — never anything else."""
+    """Result is PLAYER_R, PLAYER_Y, or None - never anything else."""
     random.seed(0)
     board = Board()
     for _ in range(50):
@@ -306,8 +265,7 @@ def test_rollout_returns_a_winner_or_none():
 
 
 def test_rollout_does_not_mutate_the_board():
-    """It plays on a copy. If this fails, the tree is being corrupted from
-    underneath the search."""
+    """It plays on a copy."""
     random.seed(0)
     board = play([(3, R), (3, Y)])
     grid_before = [row[:] for row in board.grid]
@@ -319,11 +277,7 @@ def test_rollout_does_not_mutate_the_board():
 
 
 def test_rollout_from_a_won_position_returns_that_winner():
-    """The rollout must see the game as already over and return immediately.
-
-    If Board.copy() dropped last_move, is_terminal() would be False here, the
-    rollout would play on to 42 moves, and the result would come back as a draw.
-    """
+    """The rollout must see the game as already over and return immediately."""
     assert mc.rollout(r_has_won(), PLAYER_Y) == PLAYER_R
 
 
@@ -343,13 +297,7 @@ def test_backpropagate_increments_visits_along_the_path():
 
 
 def test_backpropagate_credits_the_player_who_moved_into_the_node():
-    """The perspective test, and the one most likely to be wrong.
-
-    root is R to move; child is Y to move, so child was reached by R's move. A
-    win for R credits the child (R moved into it) and not the root (Y moved into
-    the root's position, notionally). Crediting by player_to_move instead gives a
-    search that reliably prefers losing moves.
-    """
+    """The perspective test, and the one most likely to be wrong."""
     root = Node(Board(), PLAYER_R)
     child = Node(Board(), PLAYER_Y, parent=root)
     root.children.append(child)
@@ -361,7 +309,7 @@ def test_backpropagate_credits_the_player_who_moved_into_the_node():
 
 
 def test_backpropagate_credits_the_other_side_symmetrically():
-    """Same shape, opposite winner — the mirror of the test above."""
+    """Same shape, opposite winner - the mirror of the test above."""
     root = Node(Board(), PLAYER_R)
     child = Node(Board(), PLAYER_Y, parent=root)
     root.children.append(child)
@@ -384,7 +332,7 @@ def test_backpropagate_splits_a_draw():
 
 
 # --------------------------------------------------------------------------
-# mcts_move / build_tree — structure
+# mcts_move / build_tree - structure
 # --------------------------------------------------------------------------
 
 def test_mcts_move_returns_a_legal_column():
@@ -399,7 +347,7 @@ def test_mcts_move_on_full_board_returns_none():
 
 
 def test_mcts_move_does_not_mutate_the_caller_board():
-    """The caller's board must be untouched — grid and move_count."""
+    """The caller's board must be untouched - grid and move_count."""
     random.seed(0)
     board = play([(3, R), (3, Y)])
     grid_before = [row[:] for row in board.grid]
@@ -411,10 +359,7 @@ def test_mcts_move_does_not_mutate_the_caller_board():
 
 
 def test_root_sees_every_simulation():
-    """Root visit count equals the simulation count.
-
-    Catches an off-by-one in the loop and a backprop that stops before the root.
-    """
+    """Root visit count equals the simulation count."""
     random.seed(0)
     for simulations in (1, 10, 50):
         root = mc.build_tree(Board(), PLAYER_R, simulations)
@@ -422,12 +367,7 @@ def test_root_sees_every_simulation():
 
 
 def test_never_expands_past_a_terminal_position():
-    """A terminal root must never grow children, however many simulations run.
-
-    This is the regression test for the is_fully_expanded()/is_terminal() mix-up:
-    a won board still has legal moves, so guarding on expansion state would
-    happily play on past the win and make winner() report None for a decided game.
-    """
+    """A terminal root must never grow children, however many simulations run."""
     random.seed(0)
     root = mc.build_tree(r_has_won(), PLAYER_Y, simulations=25)
 
@@ -436,7 +376,7 @@ def test_never_expands_past_a_terminal_position():
     assert root.board.move_count == 7
     assert root.board.winner() == PLAYER_R
 
-    # The root is Y to move, so it is credited from R's perspective — and R won.
+    # The root is Y to move, so it is credited from R's perspective - and R won.
     # A full WIN_REWARD per simulation proves every rollout returned R rather
     # than None: if Board.copy() dropped last_move, is_terminal() would be False
     # here, the rollouts would play on to 42 moves, and this would be 12.5.
@@ -444,16 +384,11 @@ def test_never_expands_past_a_terminal_position():
 
 
 # --------------------------------------------------------------------------
-# playing strength (stochastic — seeded, wide margins)
+# playing strength (stochastic - seeded, wide margins)
 # --------------------------------------------------------------------------
 
 def test_finds_an_immediate_win():
-    """With enough simulations the winning column dominates the visit counts.
-
-    Needs far more simulations than alpha-beta needs depth: random rollouts have
-    to stumble into the win often enough for it to show. If this ever fails,
-    raise the count before suspecting a bug.
-    """
+    """With enough simulations the winning column dominates the visit counts."""
     random.seed(0)
     root = mc.build_tree(r_can_win_in_one(), PLAYER_R, simulations=2000)
     winning = max(root.children, key=lambda c: c.visits)
@@ -469,11 +404,7 @@ def test_blocks_an_immediate_loss():
 
 
 def test_beats_a_random_player_over_many_games():
-    """The headline checkpoint: MCTS must dominate uniform random play.
-
-    Margin is deliberately loose — measured 30/30, so 80% leaves plenty of room
-    for seed variation without letting a broken search through.
-    """
+    """The headline checkpoint: MCTS must dominate uniform random play."""
     random.seed(0)
     result = score_match(mcts_agent(120), random_agent, games=20)
     assert result["win"] >= 16, result
@@ -481,9 +412,7 @@ def test_beats_a_random_player_over_many_games():
 
 @pytest.mark.slow
 def test_more_simulations_plays_at_least_as_well():
-    """A high-simulation agent should not lose a head-to-head to a
-    low-simulation one. Asserted as 'not worse' rather than 'better' — with
-    random rollouts the gain is real but noisy."""
+    """A high-simulation agent should not lose a head-to-head to a low-simulation one."""
     random.seed(0)
     result = score_match(mcts_agent(400), mcts_agent(25), games=8)
     assert result["win"] >= result["loss"], result
@@ -491,13 +420,7 @@ def test_more_simulations_plays_at_least_as_well():
 
 @pytest.mark.slow
 def test_holds_its_own_against_shallow_alphabeta():
-    """Documents the capability gap rather than asserting a win.
-
-    Vanilla MCTS spends ~25,000 board operations per move to match a search
-    visiting ~1,000 nodes: competitive only because it's handed far more work.
-    That inefficiency is what a learned value head fixes in Phase 4 — one
-    evaluation in place of a 42-move random rollout.
-    """
+    """Documents the capability gap rather than asserting a win."""
     random.seed(0)
     result = score_match(mcts_agent(400), alphabeta_agent(4), games=6)
     assert result["win"] + result["draw"] >= 1, result
