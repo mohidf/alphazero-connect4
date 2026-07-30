@@ -1,4 +1,4 @@
-# Connect 4 AI
+# alphazero-connect4
 
 An AlphaZero-style Connect 4 bot I built from scratch to learn how game AI works.
 
