@@ -57,6 +57,30 @@ class Board:
             1 for row in self.grid for cell in row if cell != EMPTY
         )
 
+    def copy(self) -> "Board":
+        """Return an independent copy of this board, history included.
+
+        Two things this must get right, both of which fail silently:
+
+        1. **Deep-copy the grid.** ``Board(list(self.grid))`` shares the row
+           lists, so writes to the copy land on the original too. Same trap as
+           ``[[EMPTY] * COLS] * ROWS`` in __init__.
+        2. **Carry last_move and last_player.** The constructor sets them to
+           None, and winner() only searches lines through last_move — so a copy
+           built by ``Board(grid)`` alone reports no winner on a won board, and
+           is_terminal() returns False. Any rollout using such a copy would run
+           all 42 moves and score every game as a draw.
+
+        move_count is recomputed from the grid by __init__, so it needs no
+        special handling — but assert it if you like.
+        """
+        copied_grid = [row[:] for row in self.grid]
+        board = Board(copied_grid)
+        board.last_move = self.last_move
+        board.last_player = self.last_player
+        board.move_count = self.move_count
+        return board
+
     def available_moves(self) -> list[int]:
         """Return the column indices that still have room, e.g. ``[0, 1, 3, 6]``.
 
