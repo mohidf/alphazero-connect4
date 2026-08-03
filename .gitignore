@@ -22,3 +22,6 @@ checkpoints/
 
 # Solver benchmark (large binaries and generated data)
 external/
+
+# Solver-labelled dataset, rebuildable with supervised_ceiling.py --generate
+data/

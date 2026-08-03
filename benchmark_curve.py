@@ -37,8 +37,8 @@ def checkpoints(directories: list[Path], points: int) -> list[tuple[int, Path]]:
     Directories can be chained, since a resumed run starts numbering again at 1
     and would otherwise look like it learned everything from scratch.
 
-    Only promoted iterations get saved, so they're unevenly spaced. Subsampling
-    keeps this from taking all day.
+    Checkpoints are written on a fixed cadence, so subsampling here is only to
+    keep this from taking all day.
     """
     found: list[tuple[int, Path]] = []
     offset = 0

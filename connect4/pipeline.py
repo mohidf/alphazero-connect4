@@ -4,11 +4,25 @@
         self-play with the current network
         add those positions to the buffer
         train on a sample of the buffer
-        play the new network against the old one
-        keep it only if it wins
+        play the new network against the old one, for the record
+        keep the new one either way
 
-That last step matters. Training can make things worse, and if the worse network
-generates the next batch of games the whole thing slides backwards.
+There used to be a promotion gate here: the new network replaced the old one only
+if it scored above 0.55 in a 20-game match. The idea was that training can make
+things worse, and a worse network generating the next batch of games would slide
+the whole thing backwards.
+
+It was thrown out because 20 games can't tell those cases apart. The standard
+error on a 20-game score is about 0.11, so a 0.55 bar sits under half an SE above
+even - an equally strong network cleared it about a third of the time, and a
+genuinely better one failed it about a third of the time. In the 'big' run only 25
+of 78 iterations promoted, and a rejection costs more than the training step: the
+next iteration's self-play comes from the old network again, so the data stops
+improving too. AlphaGo Zero gated this way; AlphaZero dropped it and always took
+the latest network, which is what this does now.
+
+The match against the previous network is still played and still logged. It just
+doesn't decide anything - it's there to show whether training steps are helping.
 """
 
 import time
@@ -38,10 +52,6 @@ from connect4.train import (
     train_epoch,
 )
 
-# Above 0.5, so an equal network doesn't get promoted on luck.
-PROMOTION_THRESHOLD = 0.55
-
-
 @dataclass
 class Config:
     iterations: int = 10
@@ -68,6 +78,10 @@ class Config:
     eval_simulations: int = 60
     # Without this a match is really just two games repeated. See arena.py.
     opening_plies: int = 4
+    # Every iteration is kept now, so numbered checkpoints are written on a
+    # cadence instead of on every promotion - otherwise a long run at 128
+    # channels leaves gigabytes behind. best.pt is still written every time.
+    checkpoint_every: int = 5
     benchmark_depth: int = 4
     benchmark_every: int = 1
     checkpoint_dir: Path = Path("checkpoints")
@@ -92,7 +106,6 @@ class IterationReport:
     loss_policy: float
     loss_value: float
     vs_incumbent: arena.MatchResult | None = None
-    promoted: bool = False
     vs_benchmark: arena.MatchResult | None = None
     learning_rate: float = LEARNING_RATE
     elapsed: float = 0.0
@@ -108,7 +121,7 @@ class IterationReport:
             f"{self.elapsed / 60:.0f}m",
         ]
         if self.vs_incumbent is not None:
-            parts.append(f"vs prev {self.vs_incumbent} {'PROMOTED' if self.promoted else 'kept old'}")
+            parts.append(f"vs prev {self.vs_incumbent}")
         if self.vs_benchmark is not None:
             parts.append(f"vs ab {self.vs_benchmark}")
         return "  |  ".join(parts)
@@ -198,23 +211,22 @@ def run(config: Config | None = None, verbose: bool = True) -> list[IterationRep
                 elapsed=time.monotonic() - started,
             )
 
-            # only keep it if it actually beats what we had
-            result = arena.play_match(
+            # Played against the outgoing network, so it has to happen before the
+            # swap below. Reported only - it doesn't decide anything any more.
+            report.vs_incumbent = arena.play_match(
                 arena.network_agent(challenger, config.eval_simulations),
                 arena.network_agent(best, config.eval_simulations),
                 games=config.eval_games,
                 rng=rng,
                 opening_plies=config.opening_plies,
             )
-            report.vs_incumbent = result
-            report.promoted = result.score > PROMOTION_THRESHOLD
 
-            if report.promoted:
-                best = challenger.eval()
+            best = challenger.eval()
+            # best.pt every time, not just at the end, so a crash or a lost
+            # terminal can't cost hours of training.
+            save(best, config.checkpoint_dir / "best.pt")
+            if iteration % config.checkpoint_every == 0:
                 save(best, config.checkpoint_dir / f"iter{iteration:03d}.pt")
-                # best.pt every time, not just at the end, so a crash or a lost
-                # terminal can't cost hours of training.
-                save(best, config.checkpoint_dir / "best.pt")
 
             # fixed opponent, so progress is comparable across iterations
             if iteration % config.benchmark_every == 0:

@@ -104,12 +104,18 @@ def main() -> None:
         print("no iterations completed")
         return
 
-    promoted = sum(r.promoted for r in reports)
+    scores = [r.vs_incumbent.score for r in reports if r.vs_incumbent is not None]
     benchmarks = [r for r in reports if r.vs_benchmark is not None]
 
     print()
     print(f"finished {len(reports)} iterations in {reports[-1].elapsed / 3600:.1f}h")
-    print(f"promotions: {promoted}/{len(reports)}")
+    if scores:
+        # One 20-game match is mostly noise, but the mean over a whole run is not:
+        # the standard error shrinks by sqrt(len(scores)). Above 0.5 means the
+        # average training step made the network better.
+        mean = sum(scores) / len(scores)
+        better = sum(s > 0.5 for s in scores)
+        print(f"mean score vs previous: {mean:.3f}  ({better}/{len(scores)} above 0.5)")
     print(f"policy loss: {reports[0].loss_policy:.4f} -> {reports[-1].loss_policy:.4f}")
     if benchmarks:
         print("vs alpha-beta depth", config.benchmark_depth)
