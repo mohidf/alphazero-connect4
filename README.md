@@ -146,9 +146,9 @@ around iteration 100 and stopped improving.
 So it beats the classical engine I wrote in stage 2. After the first 10 training
 rounds it was only scoring 0.17 against depth 4.
 
-Worth noting these two measurements disagree: it wins more games than depth-5
-alpha-beta but makes more mistakes than it. Winning and playing well aren't quite
-the same thing.
+These two measurements disagree, though: it wins more games than depth-5
+alpha-beta but makes more mistakes than it does. Winning and playing well aren't
+quite the same thing.
 
 ### Was it the network, or the training?
 
@@ -211,7 +211,7 @@ positions is intrinsically beyond this architecture.
 
 #### Does it actually play better?
 
-Fewer mistakes isn't the same as winning more - that gap has already caught me out
+Fewer mistakes isn't the same as winning more - that gap already caught me out
 once on this page - so the supervised nets were made to play. 30 games each,
 randomised paired openings, 200 simulations a side:
 
@@ -241,11 +241,11 @@ Against that, the supervised net gives up one game in thirty - close enough to
 perfect play to be indistinguishable at this sample size. The self-play net gives
 up nearly a third.
 
-That deserves a caveat, because "indistinguishable from perfect over 30 games" is
-not the same as playing perfectly, and the benchmark above says it still errs on
-7.4% of moves. Both are true, and the reason they fit together is that the benchmark
-scores the *fastest* win: a move that wins slowly counts as an error there and costs
-nothing at all in a game. The move metric is deliberately harsher than the scoreline.
+But "indistinguishable from perfect over 30 games" isn't the same as playing
+perfectly - the benchmark above says it still errs on 7.4% of moves, and both
+numbers are true at once. They fit together because the benchmark scores the
+*fastest* win: a move that wins slowly counts as an error there and costs nothing
+at all in an actual game. The move metric is just harsher than the scoreline.
 
 Three things fall out of the comparison:
 
@@ -269,12 +269,11 @@ policy. Read alongside "where the strength actually comes from" above, it refram
 that finding: search wasn't carrying the agent because search is powerful, it was
 carrying it because the network was bad.
 
-The honest summary is that the self-play numbers further up this page are a
-statement about 16 hours on one laptop GPU, not about the architecture or about
-AlphaZero. The method works; there just isn't enough of it. Getting self-play near
-the supervised number needs orders of magnitude more games, which on this machine
-means fixing throughput first - the GPU sits at about 15% while pure-Python tree
-search saturates a single core.
+The self-play numbers further up this page are a statement about 16 hours on one
+laptop GPU, not about the architecture or about AlphaZero. The method works; there
+just isn't enough of it. Getting self-play near the supervised number needs orders
+of magnitude more games, which on this machine means fixing throughput first - the
+GPU sits at about 15% while pure-Python tree search saturates a single core.
 
 Reproducing it:
 
@@ -284,14 +283,14 @@ python supervised_ceiling.py --train             # three networks
 python supervised_ceiling.py --evaluate
 ```
 
-Caveats worth keeping in mind. Training positions come from random play, so their
-distribution isn't the one a real game visits - it covers the space broadly, which
-is what a ceiling measurement wants, but it isn't free of consequences. Validation
-loss bottoms out around epoch 15 and the saved checkpoints run to 30, so these
-numbers slightly understate what the same setup reaches with early stopping. And
-the search column uses the first 200 positions of each set rather than all 1000,
-so it carries more noise than the policy column - comparing the two only works
-because both are measured on the same subset.
+A couple of things affect these numbers, though. Training positions come from
+random play, so their distribution isn't the one a real game visits - it covers
+the space broadly, which is what a ceiling measurement wants, but it isn't free of
+consequences. Validation loss bottoms out around epoch 15 and the saved
+checkpoints run to 30, so these numbers slightly understate what the same setup
+reaches with early stopping. And the search column uses the first 200 positions of
+each set rather than all 1000, so it carries more noise than the policy column -
+comparing the two only works because both are measured on the same subset.
 
 ### Reproducing the plots
 
